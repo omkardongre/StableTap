@@ -9,7 +9,7 @@ import type { ApiPromise } from "@polkadot/api";
 import { Keyring } from "@polkadot/keyring";
 import { cryptoWaitReady } from "@polkadot/util-crypto";
 import {
-  assertNetwork, connect, getBalances, loadNetwork, newInvoiceId, pay, quoteFee, watchInvoice,
+  AlreadyFundedError, assertNetwork, connect, fundNewAccount, getBalances, loadNetwork, newInvoiceId, pay, quoteFee, watchInvoice,
   type Invoice, type NetworkConfig, type PaidEvent,
 } from "../src/index.ts";
 
@@ -49,6 +49,23 @@ test("pay settles in the stablecoin, the watcher sees it, native balance is unto
   assert.ok(receipt.feePaid > 0n);
   // Quote is taken before inclusion; actual fee may differ slightly (weight refund, pool move).
   assert.ok(receipt.feePaid <= quote * 11n / 10n && receipt.feePaid >= quote * 9n / 10n, `quote ${quote} vs paid ${receipt.feePaid}`);
+});
+
+test("a fresh wallet funded once by the faucet pays without spending native", { timeout: 180_000 }, async () => {
+  const kr = new Keyring({ type: "sr25519", ss58Format: net.ss58 });
+  const faucet = kr.addFromUri("//Alice");
+  const wallet = kr.addFromUri(`//fresh/${newInvoiceId()}`);
+  const ed = api.consts.balances.existentialDeposit.toBigInt();
+
+  await fundNewAccount(api, net, faucet, wallet.address, 20_000_000n);
+  const funded = await getBalances(api, net, wallet.address);
+  assert.deepEqual(funded, { native: ed, stable: 20_000_000n });
+  await assert.rejects(fundNewAccount(api, net, faucet, wallet.address, 1n), AlreadyFundedError);
+
+  const receipt = await pay(api, net, { to: kr.addFromUri("//Charlie").address, amount: 4_500_000n, id: newInvoiceId() }, wallet);
+  const after = await getBalances(api, net, wallet.address, receipt.blockHash);
+  assert.equal(after.native, ed);
+  assert.equal(after.stable, 20_000_000n - 4_500_000n - receipt.feePaid);
 });
 
 test("a payment the customer cannot afford is rejected, not left pending", { timeout: 60_000 }, async () => {
