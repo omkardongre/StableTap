@@ -6,7 +6,8 @@ Pay in dollars on Portaldot V3 without spending the network token. The fee is pa
 
 - Workspace setup (pnpm monorepo, Node 24)
 - `spike/`: proof that a payment's fee can be paid in a stablecoin on the Portaldot V3 runtime, on a local fork
-- `packages/engine/`: shared payment logic (invoice link, pay with fee in pUSD, paid-watcher)
+- `packages/engine/`: shared payment logic (invoice link, pay with fee in pUSD, paid-watcher, faucet funding)
+- `apps/web/`: customer wallet (`/wallet`) and merchant POS (`/pos`), Next.js 16
 
 ## Requirements
 
@@ -36,6 +37,35 @@ pnpm --filter @stabletap/engine test:fork   # needs the fork running and `pnpm s
 The engine reads `STABLETAP_WS`, `STABLETAP_ASSET_ID` and `STABLETAP_ASSET_DECIMALS`; there are no defaults. Fork values are in `packages/engine/test/fork.env`.
 
 Chain types in `packages/engine/src/interfaces/` are generated from the live runtime: `pnpm --filter @stabletap/engine typegen`.
+
+## Web app (wallet + POS)
+
+The wallet key is locked by a device passkey (WebAuthn PRF). It needs a browser with passkey PRF support (Chrome on Android, Safari 18+ on iOS, recent desktop Chrome) and HTTPS or `localhost`.
+
+On the local fork (fork running and `pnpm spike:fee` run once):
+
+```bash
+pnpm --filter @stabletap/web dev:fork      # http://localhost:3000
+```
+
+Against another network, copy `apps/web/.env.example` to `apps/web/.env.local` and fill it in, then `pnpm --filter @stabletap/web build && pnpm --filter @stabletap/web start`.
+
+| Variable | Where | Purpose |
+|---|---|---|
+| `NEXT_PUBLIC_STABLETAP_WS` | browser + server | Substrate node websocket |
+| `NEXT_PUBLIC_STABLETAP_ASSET_ID` | browser + server | pUSD asset id |
+| `NEXT_PUBLIC_STABLETAP_ASSET_DECIMALS` | browser + server | pUSD decimals (checked on chain) |
+| `FAUCET_SURI` | server only, secret | funded account for `POST /api/faucet` |
+| `FAUCET_STABLE_AMOUNT` | server only | test pUSD per new wallet |
+
+The build fails if the network variables are missing or malformed. The faucet is a public endpoint: it funds only accounts that hold nothing, with a per-client cooldown; add your host's rate limiting in front of it.
+
+Checks:
+
+```bash
+pnpm --filter @stabletap/web typecheck
+pnpm --filter @stabletap/web test
+```
 
 ## Network
 
