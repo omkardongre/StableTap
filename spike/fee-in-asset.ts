@@ -19,7 +19,7 @@ import type { KeyringPair } from "@polkadot/keyring/types";
 import { cryptoWaitReady } from "@polkadot/util-crypto";
 
 const WS = process.env.PORTALDOT_WS ?? "ws://localhost:8000";
-const PUSD_ID = 7777; // unused id on the live chain as of Oct 22
+const PUSD_ID = 7779; // fork-only id; 7777 is the live pUSD and 7778 is used by the engine fork setup
 const PUSD = 1_000_000n; // 6 decimals
 const TPOT = 100_000_000_000_000n; // 14 decimals
 const PRICE = 4_500_000n; // 4.50 pUSD

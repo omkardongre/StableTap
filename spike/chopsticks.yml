@@ -37,3 +37,8 @@ import-storage:
         - providers: 1
           data:
             free: "10000000000000"
+      # Dave: platform account for split payments, holds only the existential deposit
+      - - - 5DAAnrj7VHTznn2AWBemMuyBwZWs6FNFjdyVXUeYum3PTXFy
+        - providers: 1
+          data:
+            free: "10000000000000"
