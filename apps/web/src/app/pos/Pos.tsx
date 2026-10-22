@@ -3,11 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { decodeAddress, encodeAddress } from "@polkadot/util-crypto";
-import { encodeInvoice, newInvoiceId, parseAmount, watchInvoice, type Invoice, type PaidEvent } from "@stabletap/engine";
+import { chainNow, encodeInvoice, newInvoiceId, parseAmount, watchInvoice, type Invoice, type PaidEvent } from "@stabletap/engine";
 import { Qr } from "@/components/Qr";
 import { getApi } from "@/lib/chain";
 import { errorText, shortHash, usd } from "@/lib/format";
-import { network } from "@/lib/network";
+import { network, options } from "@/lib/network";
 import { loadVault } from "@/lib/vault";
 
 interface Shop {
@@ -19,8 +19,16 @@ const SHOP_KEY = "stabletap.pos.shop.v1";
 // The POS keypad charges in cents; the asset may have more decimals.
 const KEYPAD_DECIMALS = 2;
 const MAX_DIGITS = 7;
+const INVOICE_TTL_SEC = 300;
+// After expiry, keep watching briefly for a payment signed just before it.
+const IN_FLIGHT_GRACE_SEC = 60;
 
-type View = { name: "setup" } | { name: "keypad" } | { name: "charging"; invoice: Invoice; link: string } | { name: "paid"; invoice: Invoice; paid: PaidEvent };
+type View =
+  | { name: "setup" }
+  | { name: "keypad" }
+  | { name: "charging"; invoice: Invoice; link: string }
+  | { name: "paid"; invoice: Invoice; paid: PaidEvent }
+  | { name: "expired"; invoice: Invoice };
 
 function loadShop(): Shop | null {
   const raw = localStorage.getItem(SHOP_KEY);
@@ -53,12 +61,14 @@ export function Pos() {
     }
   }, []);
 
-  function charge() {
+  async function charge() {
     if (!shop) return;
     setError(null);
     try {
       const amount = parseAmount(centsText(digits), network.decimals);
-      const invoice: Invoice = { to: shop.payout, amount, id: newInvoiceId(), merchant: shop.name };
+      // Expiry uses chain time so a wrong device clock can't extend or cut it.
+      const expiresAt = (await chainNow(await getApi())) + INVOICE_TTL_SEC;
+      const invoice: Invoice = { to: shop.payout, amount, id: newInvoiceId(), merchant: shop.name, expiresAt, ...(options.split ? { split: options.split } : {}) };
       setView({ name: "charging", invoice, link: encodeInvoice(invoice, network.ss58) });
     } catch (e) {
       setError(errorText(e));
@@ -123,7 +133,7 @@ export function Pos() {
               ⌫
             </button>
           </div>
-          <button className="btn primary" onClick={charge} disabled={!canCharge}>
+          <button className="btn primary" onClick={() => void charge()} disabled={!canCharge}>
             Charge ${amountText}
           </button>
         </>
@@ -134,9 +144,23 @@ export function Pos() {
           invoice={view.invoice}
           link={view.link}
           onPaid={(paid) => setView({ name: "paid", invoice: view.invoice, paid })}
+          onExpired={() => setView({ name: "expired", invoice: view.invoice })}
           onError={(e) => setError(e)}
           onCancel={() => setView({ name: "keypad" })}
         />
+      )}
+
+      {view?.name === "expired" && (
+        <>
+          <div className="card" role="status">
+            <span className="label">Expired, not paid</span>
+            <span className="big">{usd(view.invoice.amount)}</span>
+            <span className="mono small">{view.invoice.id}</span>
+          </div>
+          <button className="btn primary" onClick={() => setView({ name: "keypad" })}>
+            Back to keypad
+          </button>
+        </>
       )}
 
       {view?.name === "paid" && (
@@ -178,49 +202,65 @@ function Charging({
   invoice,
   link,
   onPaid,
+  onExpired,
   onError,
   onCancel,
 }: {
   invoice: Invoice;
   link: string;
   onPaid: (p: PaidEvent) => void;
+  onExpired: () => void;
   onError: (e: string) => void;
   onCancel: () => void;
 }) {
-  const cbs = useRef({ onPaid, onError });
-  cbs.current = { onPaid, onError };
+  const cbs = useRef({ onPaid, onExpired, onError });
+  cbs.current = { onPaid, onExpired, onError };
   const [watching, setWatching] = useState(false);
+  const [left, setLeft] = useState<number | null>(null);
 
   useEffect(() => {
     let stop: (() => void) | undefined;
+    let timer: ReturnType<typeof setInterval> | undefined;
     let live = true;
     getApi()
-      .then((api) =>
-        watchInvoice(api, network, invoice, {
+      .then(async (api) => {
+        // Count down on the device clock, anchored to chain time once.
+        const skew = (await chainNow(api)) - Date.now() / 1000;
+        const s = await watchInvoice(api, network, invoice, {
           onPaid: (p) => live && cbs.current.onPaid(p),
           onError: (e) => live && cbs.current.onError(`Stopped watching for the payment: ${e.message}`),
-        }),
-      )
-      .then((s) => {
-        if (live) {
-          stop = s;
-          setWatching(true);
-        } else s();
+        });
+        if (!live) return s();
+        stop = s;
+        setWatching(true);
+        const tick = () => {
+          const remaining = Math.ceil((invoice.expiresAt ?? Infinity) - (Date.now() / 1000 + skew));
+          setLeft(remaining);
+          if (remaining <= -IN_FLIGHT_GRACE_SEC) {
+            clearInterval(timer);
+            stop?.();
+            if (live) cbs.current.onExpired();
+          }
+        };
+        tick();
+        timer = setInterval(tick, 1000);
       })
       .catch((e: unknown) => live && cbs.current.onError(errorText(e)));
     return () => {
       live = false;
+      clearInterval(timer);
       stop?.();
     };
   }, [invoice]);
 
+  const expired = left !== null && left <= 0;
   return (
     <div className="card">
       <span className="label">Scan to pay {invoice.merchant}</span>
       <span className="big">{usd(invoice.amount)}</span>
-      <Qr value={link} label={`Payment QR code for ${usd(invoice.amount)}`} />
+      {!expired && <Qr value={link} label={`Payment QR code for ${usd(invoice.amount)}`} />}
       <p className="muted" aria-busy={!watching}>
-        {watching ? "Waiting for payment…" : "Connecting…"}
+        {!watching ? "Connecting…" : expired ? "Expired. Checking for a payment already sent…" : `Waiting for payment… expires in ${fmtLeft(left)}`}
       </p>
       <span className="mono small">{invoice.id}</span>
       <button className="btn" onClick={() => navigator.clipboard.writeText(link)}>
@@ -283,4 +323,9 @@ function ShopSettings({ initial, onSave }: { initial: Shop | null; onSave: (s: S
       </button>
     </form>
   );
+}
+
+function fmtLeft(sec: number | null): string {
+  if (sec === null || !Number.isFinite(sec)) return "…";
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
 }

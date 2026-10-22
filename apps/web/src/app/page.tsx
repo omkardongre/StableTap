@@ -11,6 +11,15 @@ export default function Home() {
       <Link className="btn" href="/pos">
         Open merchant POS
       </Link>
+      <Link className="btn" href="/dashboard">
+        Merchant dashboard
+      </Link>
+      <Link className="btn" href="/stats">
+        On-chain stats
+      </Link>
+      <Link className="btn" href="/partner">
+        Demo partner app (Pay button)
+      </Link>
     </section>
   );
 }

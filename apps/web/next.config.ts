@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import { loadNetwork } from "@stabletap/engine/config";
+import { loadAppOptions } from "./src/lib/options.ts";
 
 const isDev = process.env.NODE_ENV === "development";
 
@@ -9,6 +10,8 @@ const net = loadNetwork({
   STABLETAP_ASSET_ID: process.env.NEXT_PUBLIC_STABLETAP_ASSET_ID,
   STABLETAP_ASSET_DECIMALS: process.env.NEXT_PUBLIC_STABLETAP_ASSET_DECIMALS,
 });
+const opts = loadAppOptions(process.env, net.ss58);
+if (opts.payAssets.includes(net.assetId)) throw new Error("NEXT_PUBLIC_STABLETAP_PAY_ASSETS must not include the stablecoin itself");
 
 // 'wasm-unsafe-eval': sr25519 crypto and the QR decoder are WebAssembly.
 const csp = [
@@ -17,7 +20,7 @@ const csp = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' blob: data:",
   "font-src 'self'",
-  `connect-src 'self' ${net.ws}`,
+  `connect-src 'self' ${net.ws}${opts.indexer ? ` ${new URL(opts.indexer).origin}` : ""}`,
   "media-src 'self' blob:",
   "worker-src 'self' blob:",
   "object-src 'none'",
