@@ -1,0 +1,39 @@
+# Local fork of the live Portaldot V3 testnet. Nothing here touches the real chain.
+# Dev accounts get balances through storage overrides so the spike runs without tPOT.
+endpoint: wss://test-node-v3.portaldot.dev
+port: 8000
+build-block-mode: Instant
+runtime-log-level: 0
+# The runtime imports statement-store host functions Chopsticks doesn't ship; they are never called on our path.
+allow-unresolved-imports: true
+
+# Chopsticks decodes extrinsics with polkadot.js, which assumes the Asset Hub fee
+# extension (asset id = XCM location). Portaldot uses NativeOrWithId<u32>.
+registered-types:
+  types:
+    TAssetConversion: Option<FrameSupportTokensFungibleUnionOfNativeOrWithId>
+  signedExtensions:
+    ChargeAssetTxPayment:
+      extrinsic:
+        tip: Compact<Balance>
+        assetId: Option<FrameSupportTokensFungibleUnionOfNativeOrWithId>
+      payload: {}
+
+import-storage:
+  System:
+    Account:
+      # Alice: issuer + liquidity provider (rich)
+      - - - 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
+        - providers: 1
+          data:
+            free: "100000000000000000" # 1,000 tPOT
+      # Bob: customer, holds ONLY the existential deposit (0.1 tPOT)
+      - - - 5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty
+        - providers: 1
+          data:
+            free: "10000000000000" # 0.1 tPOT = ED
+      # Charlie: merchant, holds only the existential deposit
+      - - - 5FLSigC9HGRKVhB9FiEo4Y3koPsNmBmLJbpXg2mp1hXcS59Y
+        - providers: 1
+          data:
+            free: "10000000000000"
