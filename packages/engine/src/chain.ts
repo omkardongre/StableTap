@@ -46,6 +46,11 @@ export async function assertNetwork(api: ApiPromise, net: NetworkConfig): Promis
   if (native.isZero() || stable.isZero()) throw new Error(`Pool for asset ${net.assetId} has no liquidity`);
 }
 
+/** Chain time of the best block, in unix seconds (pallet-timestamp). Independent of the device clock. */
+export async function chainNow(api: ApiPromise): Promise<number> {
+  return Math.floor((await api.query.timestamp.now()).toNumber() / 1000);
+}
+
 export interface Balances {
   /** Free native balance (planck). */
   native: bigint;

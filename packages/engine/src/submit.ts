@@ -61,6 +61,8 @@ export function submitFinalized(
 }
 
 export function describeDispatchError(api: ApiPromise, e: DispatchError): string {
+  if (e.isToken && e.asToken.isCannotCreate) return "token.CannotCreate: the receiving account does not exist on chain yet (it needs the one-time native deposit)";
+  if (e.isToken && e.asToken.isBelowMinimum) return "token.BelowMinimum: the amount would leave an account below the asset's minimum balance";
   if (!e.isModule) return e.toString();
   const { section, name, docs } = api.registry.findMetaError(e.asModule);
   return `${section}.${name}${docs.length ? `: ${docs.join(" ")}` : ""}`;
