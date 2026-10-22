@@ -53,7 +53,9 @@ export interface Balances {
   stable: bigint;
 }
 
-export async function getBalances(api: ApiPromise, net: NetworkConfig, who: string): Promise<Balances> {
-  const [account, asset] = await Promise.all([api.query.system.account(who), api.query.assets.account(net.assetId, who)]);
+/** Balances at the best block, or at `blockHash` when given (e.g. the block a payment landed in). */
+export async function getBalances(api: ApiPromise, net: NetworkConfig, who: string, blockHash?: string): Promise<Balances> {
+  const q = blockHash ? (await api.at(blockHash)).query : api.query;
+  const [account, asset] = await Promise.all([q.system.account(who), q.assets.account(net.assetId, who)]);
   return { native: account.data.free.toBigInt(), stable: asset.isSome ? asset.unwrap().balance.toBigInt() : 0n };
 }

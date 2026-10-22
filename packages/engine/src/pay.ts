@@ -2,10 +2,11 @@ import type {} from "./augment.ts";
 import type { ApiPromise } from "@polkadot/api";
 import type { SubmittableExtrinsic } from "@polkadot/api/types";
 import type { KeyringPair } from "@polkadot/keyring/types";
-import type { DispatchError, EventRecord } from "@polkadot/types/interfaces";
+import type { EventRecord } from "@polkadot/types/interfaces";
 import { NATIVE, feeAsset, withId } from "./chain.ts";
 import type { NetworkConfig } from "./config.ts";
 import { memoFor, type Invoice } from "./invoice.ts";
+import { submitFinalized } from "./submit.ts";
 
 export interface Receipt {
   txHash: string;
@@ -52,39 +53,8 @@ export async function pay(
   const tx = await buildPayCall(api, net, inv).signAsync(payer, feeAsset(net.assetId));
   const txHash = tx.hash.toHex();
   onStage?.("signed", txHash);
-
-  return new Promise<Receipt>((resolve, reject) => {
-    let unsub: (() => void) | undefined;
-    let done = false;
-    const finish = (err: Error | null, receipt?: Receipt) => {
-      if (done) return;
-      done = true;
-      unsub?.();
-      if (err) reject(err);
-      else resolve(receipt!);
-    };
-
-    tx.send((result) => {
-      const { status, events, dispatchError } = result;
-      if (status.isInvalid || status.isDropped || status.isUsurped || status.isFinalityTimeout) {
-        return finish(new Error(`Transaction ${status.type.toLowerCase()}`));
-      }
-      if (dispatchError) return finish(new Error(describe(api, dispatchError)));
-      if (status.isInBlock) return onStage?.("inBlock", txHash);
-      if (!status.isFinalized) return;
-
-      const blockHash = status.asFinalized.toHex();
-      api.rpc.chain
-        .getHeader(blockHash)
-        .then((header) => finish(null, { txHash, blockHash, blockNumber: header.number.toNumber(), feePaid: feeFrom(api, net, events) }))
-        .catch((e: unknown) => finish(e instanceof Error ? e : new Error(String(e))));
-    })
-      .then((u) => {
-        unsub = u;
-        if (done) u();
-      })
-      .catch((e: unknown) => finish(e instanceof Error ? e : new Error(String(e))));
-  });
+  const done = await submitFinalized(api, tx, (stage) => onStage?.(stage, txHash));
+  return { txHash, blockHash: done.blockHash, blockNumber: done.blockNumber, feePaid: feeFrom(api, net, done.events) };
 }
 
 /** The fee must have been paid in our stablecoin; anything else breaks the product guarantee. */
@@ -95,10 +65,4 @@ function feeFrom(api: ApiPromise, net: NetworkConfig, events: EventRecord[]): bi
   const paidIn = (assetId.toJSON() as { withId?: number } | null)?.withId;
   if (paidIn !== net.assetId) throw new Error(`Fee was paid in ${JSON.stringify(assetId.toJSON())}, expected asset ${net.assetId}`);
   return BigInt(actualFee.toString());
-}
-
-function describe(api: ApiPromise, e: DispatchError): string {
-  if (!e.isModule) return e.toString();
-  const { section, name, docs } = api.registry.findMetaError(e.asModule);
-  return `${section}.${name}${docs.length ? `: ${docs.join(" ")}` : ""}`;
 }
