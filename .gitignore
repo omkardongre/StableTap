@@ -23,3 +23,7 @@ contracts/types/
 
 # raw runtime metadata (re-fetched by `pnpm typegen`)
 packages/engine/metadata/
+
+# web: generated at dev/build time
+apps/web/public/wasm/
+apps/web/next-env.d.ts
