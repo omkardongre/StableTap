@@ -5,7 +5,7 @@
   "version": "0.0.0",
   "description": "StableTap customer wallet and merchant POS",
   "scripts": {
-    "assets": "node scripts/copy-wasm.ts",
+    "assets": "node scripts/copy-wasm.ts && pnpm --filter @stabletap/sdk build",
     "dev": "pnpm assets && next dev",
     "build": "pnpm assets && next build",
     "start": "next start",
@@ -21,6 +21,7 @@
     "@polkadot/util": "14.0.3",
     "@polkadot/util-crypto": "14.0.3",
     "@stabletap/engine": "workspace:*",
+    "@stabletap/sdk": "workspace:*",
     "barcode-detector": "3.2.3",
     "next": "16.4.2",
     "qrcode": "1.5.4",
