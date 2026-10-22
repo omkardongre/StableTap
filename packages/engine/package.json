@@ -1,0 +1,31 @@
+{
+  "name": "@stabletap/engine",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "Pay in pUSD on Portaldot V3 with the fee paid in pUSD",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/invoice.test.ts",
+    "test:fork": "node --env-file=test/fork.env --test --test-concurrency=1 test/fork.test.ts",
+    "typegen": "node scripts/fetch-metadata.ts https://test-node-v3.portaldot.dev metadata/portaldot-v3.json && polkadot-types-from-defs --package @stabletap/engine/interfaces --input ./src/interfaces --endpoint ./metadata/portaldot-v3.json && polkadot-types-from-chain --package @stabletap/engine/interfaces --endpoint ./metadata/portaldot-v3.json --output ./src/interfaces && node scripts/fix-typegen.ts"
+  },
+  "dependencies": {
+    "@polkadot/api": "17.0.2",
+    "@polkadot/keyring": "14.0.3",
+    "@polkadot/types": "17.0.2",
+    "@polkadot/util": "14.0.3",
+    "@polkadot/util-crypto": "14.0.3"
+  },
+  "devDependencies": {
+    "@polkadot/api-base": "17.0.2",
+    "@polkadot/rpc-core": "17.0.2",
+    "@polkadot/typegen": "17.0.2",
+    "@polkadot/types-codec": "17.0.2",
+    "@types/node": "24.19.2",
+    "typescript": "5.9.3"
+  }
+}
