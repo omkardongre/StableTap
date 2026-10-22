@@ -7,6 +7,9 @@ dist/
 out/
 coverage/
 *.log
+*.tsbuildinfo
+.turbo/
+.pnpm-store/
 .DS_Store
 
 # chopsticks local fork db
@@ -17,3 +20,6 @@ db.sqlite*
 contracts/artifacts/
 contracts/cache/
 contracts/types/
+
+# raw runtime metadata (re-fetched by `pnpm typegen`)
+packages/engine/metadata/
