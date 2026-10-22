@@ -13,7 +13,14 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test test/invoice.test.ts",
     "test:fork": "node --env-file=test/fork.env --test --test-concurrency=1 test/fork.test.ts",
-    "typegen": "node scripts/fetch-metadata.ts https://test-node-v3.portaldot.dev metadata/portaldot-v3.json && polkadot-types-from-defs --package @stabletap/engine/interfaces --input ./src/interfaces --endpoint ./metadata/portaldot-v3.json && polkadot-types-from-chain --package @stabletap/engine/interfaces --endpoint ./metadata/portaldot-v3.json --output ./src/interfaces && node scripts/fix-typegen.ts"
+    "typegen": "node scripts/fetch-metadata.ts https://test-node-v3.portaldot.dev metadata/portaldot-v3.json && polkadot-types-from-defs --package @stabletap/engine/interfaces --input ./src/interfaces --endpoint ./metadata/portaldot-v3.json && polkadot-types-from-chain --package @stabletap/engine/interfaces --endpoint ./metadata/portaldot-v3.json --output ./src/interfaces && node scripts/fix-typegen.ts",
+    "setup:stablecoin": "node --env-file=.env.setup scripts/setup-stablecoin.ts",
+    "setup:fork": "node --env-file=test/fork.env scripts/setup-stablecoin.ts",
+    "live:payment": "node --env-file=.env.setup scripts/live-payment.ts",
+    "setup:port": "node --env-file=.env.setup --env-file=port.env scripts/setup-stablecoin.ts",
+    "setup:fork:port": "node --env-file=test/fork.env --env-file=port.env --env-file=test/fork-port.env scripts/setup-stablecoin.ts",
+    "live:flows": "node --env-file=.env.setup scripts/live-flows.ts",
+    "fund:evm": "node --env-file=.env.setup scripts/fund-evm.ts"
   },
   "dependencies": {
     "@polkadot/api": "17.0.2",

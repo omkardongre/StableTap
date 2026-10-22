@@ -1,0 +1,26 @@
+{
+  "network": "wss://test-node-v3.portaldot.dev",
+  "genesisHash": "0xd4f9acbcf7f52388d8b095abe3c198d19fc510e0343e643e87cfbccb155283bd",
+  "specVersion": 3002,
+  "assetId": 7780,
+  "decimals": 6,
+  "symbol": "PORT",
+  "issuer": "5Eph8MeAG5mBCZCN5nsX3bdgx9LeFMnaUJnRFfo9eVaTseZv",
+  "setupTx": {
+    "hash": "0xe4200733aee8caccf723c300839014e1fcb7f4fb2e95eb9c791a9c155f55f602",
+    "block": 149633,
+    "blockHash": "0x2f520a4ff38d581d29774d2b1b856c536fd73bdec75247e980b163d5c1beca1e",
+    "calls": [
+      "assets.create",
+      "assets.setMetadata",
+      "assets.mint",
+      "assetConversion.createPool",
+      "assetConversion.addLiquidity"
+    ]
+  },
+  "poolReserves": {
+    "native": "10000000000000000",
+    "stable": "200000000"
+  },
+  "verifiedAt": "2026-10-22T18:37:26.786Z"
+}

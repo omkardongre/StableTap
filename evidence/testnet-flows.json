@@ -1,0 +1,63 @@
+{
+  "network": "wss://test-node-v3.portaldot.dev",
+  "genesisHash": "0xd4f9acbcf7f52388d8b095abe3c198d19fc510e0343e643e87cfbccb155283bd",
+  "stablecoin": 7777,
+  "payAsset": {
+    "id": 7780,
+    "symbol": "PORT"
+  },
+  "accounts": {
+    "customer": "5Dh8KcbCMjPpUYz8QxhdDhaoV1XNdgq99K2Fu1rEuJLaeWSb",
+    "merchant": "5Dt5GTUd1KvX9hFY38gjdB1ovtpT2BdypDnDjVN27ok6Jb68",
+    "platform": "5Eph8MeAG5mBCZCN5nsX3bdgx9LeFMnaUJnRFfo9eVaTseZv",
+    "tokenHolder": "5EcK2BP8NZJwzRX3PsqVapVBDPEZS4guxeT3ND9vFsizjacA",
+    "team": "5FLgooJ8ethTt9iL4hZo2CcbFpkVPZjz3H5FS5EqRqnagVHq",
+    "teamSignatories": [
+      "5Dt5GTUd1KvX9hFY38gjdB1ovtpT2BdypDnDjVN27ok6Jb68",
+      "5HCBMrEX34mQHNvm15XyTHydvonoiYqiqhDaDgyz7RQ2rh93",
+      "5DHnLt31J8jVQAPxvPQ3oyvkKz7YiCovNTSa963MbJjKS941"
+    ]
+  },
+  "splitPayment": {
+    "invoiceId": "inv-npjd1z4zaa",
+    "amount": "4500000",
+    "merchantShare": "4455000",
+    "platformShare": "45000",
+    "feePaidStable": "22498",
+    "txHash": "0xfc62323a59beb5c6efaf86586bba1062464213879d730abe96150ee97d7c6b36",
+    "block": 149659,
+    "extrinsicIndex": 1,
+    "explorer": "https://scanner-testnet-v3.portaldot.dev/#/extrinsics/149659-1"
+  },
+  "refund": {
+    "invoiceId": "inv-npjd1z4zaa",
+    "amount": "4455000",
+    "feePaidStable": "19087",
+    "txHash": "0x2718f93f34fceb3918124284cc9af02d1f97ec629b466e9225fdd8149639a1e1",
+    "block": 149662,
+    "extrinsicIndex": 1,
+    "explorer": "https://scanner-testnet-v3.portaldot.dev/#/extrinsics/149662-1"
+  },
+  "payWithToken": {
+    "invoiceId": "inv-5rgwmxrmgn",
+    "amount": "4500000",
+    "spentIn": "9784205",
+    "maxIn": "9876732",
+    "feePaidInToken": "52614",
+    "nativeSpent": "0",
+    "txHash": "0x559d7764287ad7984ab736018bfa1cba211e7846d7effa96e721950512d8c394",
+    "block": 149665,
+    "extrinsicIndex": 1,
+    "explorer": "https://scanner-testnet-v3.portaldot.dev/#/extrinsics/149665-1"
+  },
+  "teamPayout": {
+    "threshold": 2,
+    "amount": "4000000",
+    "feePaidStable": "14466",
+    "txHash": "0xb4ac74d0f0086d7e61be130e97070ba85936daaffb4fff699ad4b6a0f60c829a",
+    "block": 149671,
+    "extrinsicIndex": 1,
+    "explorer": "https://scanner-testnet-v3.portaldot.dev/#/extrinsics/149671-1"
+  },
+  "verifiedAt": "2026-10-22T18:41:15.147Z"
+}

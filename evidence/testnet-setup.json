@@ -1,0 +1,26 @@
+{
+  "network": "wss://test-node-v3.portaldot.dev",
+  "genesisHash": "0xd4f9acbcf7f52388d8b095abe3c198d19fc510e0343e643e87cfbccb155283bd",
+  "specVersion": 3002,
+  "assetId": 7777,
+  "decimals": 6,
+  "symbol": "pUSD",
+  "issuer": "5Eph8MeAG5mBCZCN5nsX3bdgx9LeFMnaUJnRFfo9eVaTseZv",
+  "setupTx": {
+    "hash": "0x50ac433717eddffaacb9e5a1e28006c714805a1c21435975747878cf43d0059f",
+    "block": 148225,
+    "blockHash": "0xaf4f55e1be1c678c4e6d52a38c3dc7f64da1caa027deb2bfd080ec23ca18a304",
+    "calls": [
+      "assets.create",
+      "assets.setMetadata",
+      "assets.mint",
+      "assetConversion.createPool",
+      "assetConversion.addLiquidity"
+    ]
+  },
+  "poolReserves": {
+    "native": "15000000000000000",
+    "stable": "150000000"
+  },
+  "verifiedAt": "2026-10-22T16:16:02.591Z"
+}

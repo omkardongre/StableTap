@@ -1,0 +1,30 @@
+{
+  "network": "wss://test-node-v3.portaldot.dev",
+  "genesisHash": "0xd4f9acbcf7f52388d8b095abe3c198d19fc510e0343e643e87cfbccb155283bd",
+  "invoice": {
+    "id": "inv-26v2xrxk0v",
+    "amount": "4500000",
+    "amountDisplay": "4.50",
+    "merchant": "Corner Cafe"
+  },
+  "customer": "5H9KnwFKtFNKXfQE3VFF2ScE6ks6DiWGTzm1vATSUWrnKsT7",
+  "merchantAddress": "5FjkqQEgRvZzHYLciHzs1hZnhEjpAnyyPjiWwDJ7bg7ireZM",
+  "payment": {
+    "txHash": "0x144a9a16d9d03c5008acf70a1c7134ee28438e7b9cefa7714a9f2f63ced31813",
+    "block": 148241,
+    "blockHash": "0xb16316dfff4626a0169595123724727f1bf9783da461fd0fe8d1e7cbb743eab0",
+    "extrinsicIndex": 1,
+    "explorer": "https://scanner-testnet-v3.portaldot.dev/#/extrinsics/148241-1",
+    "feePaidStable": "18370",
+    "feePaidDisplay": "0.01837",
+    "feeQuoteDisplay": "0.01837",
+    "nativeSpentByCustomer": "0",
+    "merchantReceived": "4500000",
+    "watcherDetectedSameTx": true
+  },
+  "fundingTxs": [
+    "0x428633ac386f2646ed5bb01e75d36607cdf7e1011857a04687826b917096df93",
+    "0xba5959850757cf0d3b74696ccbb0cdb621f8a7af42967f22b2e27e3dd73066a8"
+  ],
+  "verifiedAt": "2026-10-22T16:17:38.062Z"
+}
