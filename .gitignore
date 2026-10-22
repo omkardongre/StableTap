@@ -1,0 +1,19 @@
+node_modules/
+.env
+.env.*
+!.env.example
+.next/
+dist/
+out/
+coverage/
+*.log
+.DS_Store
+
+# chopsticks local fork db
+*.sqlite
+db.sqlite*
+
+# hardhat
+contracts/artifacts/
+contracts/cache/
+contracts/types/

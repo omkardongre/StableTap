@@ -1,0 +1,14 @@
+{
+  "name": "stabletap",
+  "private": true,
+  "description": "Pay in dollars on Portaldot V3 without spending POT",
+  "license": "MIT",
+  "packageManager": "pnpm@10.24.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "spike:fork": "pnpm --filter @stabletap/spike fork",
+    "spike:fee": "pnpm --filter @stabletap/spike fee"
+  }
+}
