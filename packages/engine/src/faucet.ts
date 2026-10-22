@@ -6,8 +6,9 @@ import type { NetworkConfig } from "./config.ts";
 import { submitFinalized, type Finalized } from "./submit.ts";
 
 /**
- * Give a brand-new account what it needs to use the stablecoin: exactly the
- * native existential deposit (so the account can exist) plus `stableAmount`.
+ * Give a brand-new account what it needs to pay: exactly the native
+ * existential deposit (so the account can exist) plus `amount` of the
+ * stablecoin, or of `assetId` when given (e.g. a community token to pay with).
  * Refuses accounts that already hold anything, so a wallet is funded once.
  * The faucet pays its own fee in the native token.
  */
@@ -16,14 +17,15 @@ export async function fundNewAccount(
   net: NetworkConfig,
   faucet: KeyringPair,
   to: string,
-  stableAmount: bigint,
+  amount: bigint,
+  assetId: number = net.assetId,
 ): Promise<Finalized> {
-  if (stableAmount <= 0n) throw new Error("Faucet amount must be positive");
+  if (amount <= 0n) throw new Error("Faucet amount must be positive");
   const current = await getBalances(api, net, to);
   if (current.native > 0n || current.stable > 0n) throw new AlreadyFundedError();
   const ed = api.consts.balances.existentialDeposit.toBigInt();
   const tx = await api.tx.utility
-    .batchAll([api.tx.balances.transferKeepAlive(to, ed), api.tx.assets.transferKeepAlive(net.assetId, to, stableAmount)])
+    .batchAll([api.tx.balances.transferKeepAlive(to, ed), api.tx.assets.transferKeepAlive(assetId, to, amount)])
     .signAsync(faucet);
   return submitFinalized(api, tx);
 }
