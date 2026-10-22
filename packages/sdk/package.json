@@ -1,0 +1,56 @@
+{
+  "name": "@stabletap/sdk",
+  "version": "0.1.0",
+  "description": "Take dollar payments on Portaldot with the fee paid in dollars: invoice links, pay, watch, refund, and a React Pay button",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "default": "./dist/react.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "check:package": "publint && attw --pack . --profile esm-only",
+    "test": "pnpm build && node --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@polkadot/api": "17.0.2",
+    "@polkadot/keyring": "14.0.3",
+    "@polkadot/types": "17.0.2",
+    "@polkadot/util": "14.0.3",
+    "@polkadot/util-crypto": "14.0.3"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "0.18.5",
+    "@stabletap/engine": "workspace:*",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "publint": "0.3.25",
+    "react": "19.3.1",
+    "tsdown": "0.23.1",
+    "typescript": "5.9.3"
+  }
+}
