@@ -27,3 +27,9 @@ packages/engine/metadata/
 # web: generated at dev/build time
 apps/web/public/wasm/
 apps/web/next-env.d.ts
+
+# indexer: local SQLite databases
+apps/indexer/data/
+*.db
+*.db-shm
+*.db-wal
