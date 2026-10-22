@@ -1,0 +1,38 @@
+{
+  "name": "@stabletap/web",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "StableTap customer wallet and merchant POS",
+  "scripts": {
+    "assets": "node scripts/copy-wasm.ts",
+    "dev": "pnpm assets && next dev",
+    "build": "pnpm assets && next build",
+    "start": "next start",
+    "typecheck": "node scripts/with-env.ts fork.env next typegen && tsc --noEmit",
+    "test": "node --test test/*.test.ts",
+    "dev:fork": "pnpm assets && node scripts/with-env.ts fork.env next dev",
+    "build:fork": "pnpm assets && node scripts/with-env.ts fork.env next build",
+    "start:fork": "node scripts/with-env.ts fork.env next start"
+  },
+  "dependencies": {
+    "@polkadot/api": "17.0.2",
+    "@polkadot/keyring": "14.0.3",
+    "@polkadot/util": "14.0.3",
+    "@polkadot/util-crypto": "14.0.3",
+    "@stabletap/engine": "workspace:*",
+    "barcode-detector": "3.2.3",
+    "next": "16.4.2",
+    "qrcode": "1.5.4",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zxing-wasm": "3.1.6"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/qrcode": "1.5.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "typescript": "5.9.3"
+  }
+}

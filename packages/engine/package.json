@@ -5,7 +5,9 @@
   "version": "0.0.0",
   "description": "Pay in pUSD on Portaldot V3 with the fee paid in pUSD",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./config": "./src/config.ts",
+    "./invoice": "./src/invoice.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
