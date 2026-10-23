@@ -30,6 +30,17 @@ export async function fundNewAccount(
   return submitFinalized(api, tx);
 }
 
+/**
+ * Open a brand-new receive-only account (e.g. a shop wallet): exactly the native
+ * existential deposit and nothing else, so it can receive the stablecoin but starts at $0.
+ */
+export async function openAccount(api: ApiPromise, net: NetworkConfig, faucet: KeyringPair, to: string): Promise<Finalized> {
+  const current = await getBalances(api, net, to);
+  if (current.native > 0n || current.stable > 0n) throw new AlreadyFundedError();
+  const ed = api.consts.balances.existentialDeposit.toBigInt();
+  return submitFinalized(api, await api.tx.balances.transferKeepAlive(to, ed).signAsync(faucet));
+}
+
 export class AlreadyFundedError extends Error {
   constructor() {
     super("This account is already funded");
