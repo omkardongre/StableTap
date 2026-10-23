@@ -11,7 +11,7 @@ import type { KeyringPair } from "@polkadot/keyring/types";
 import { cryptoWaitReady, sortAddresses } from "@polkadot/util-crypto";
 import {
   AlreadyFundedError, InvoiceExpiredError, assertNetwork, chainNow, connect, fundNewAccount, getBalances, loadNetwork, newInvoiceId, pay, quoteFee, refund,
-  multisigAddress, payWithAsset, quoteSwapPay, scanBlock, settlesInvoice, submitFinalized, transferStable, watchInvoice,
+  buildPayCall, multisigAddress, nativeFeeCheck, payWithAsset, quoteSwapPay, scanBlock, settlesInvoice, submitFinalized, transferStable, watchInvoice,
   type Invoice, type NetworkConfig, type PaidEvent,
 } from "../src/index.ts";
 
@@ -42,6 +42,11 @@ test("a fresh wallet pays in the stablecoin, the watcher sees it, native stays a
   const merchant = kr.addFromUri("//Charlie");
   const inv: Invoice = { to: merchant.address, amount: 4_500_000n, id: newInvoiceId() };
   const quote = await quoteFee(api, net, inv, customer.address);
+  // Contrast: with the usual native fee the same payment is refused by the node.
+  const native = await nativeFeeCheck(api, net, inv, customer.address);
+  assert.deepEqual([native.spendable, native.payable], [0n, false]);
+  const nativeTx = await buildPayCall(api, net, inv).signAsync(customer);
+  await assert.rejects(api.rpc.author.submitExtrinsic(nativeTx), /1010|Inability to pay some fees/);
   const start = (await api.rpc.chain.getHeader()).number.toNumber();
   const mBefore = await getBalances(api, net, merchant.address);
 

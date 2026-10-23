@@ -65,6 +65,23 @@ export async function quoteCallFee(api: ApiPromise, net: NetworkConfig, call: Su
   return quote.unwrap().toBigInt();
 }
 
+/**
+ * What the same payment would face with the usual native-token fee: the
+ * runtime's native fee estimate against what the payer may spend without
+ * dropping below the existential deposit or frozen funds (the rule fee
+ * withdrawal applies). A payer holding only the deposit can't pay it.
+ */
+export async function nativeFeeCheck(api: ApiPromise, net: NetworkConfig, inv: Invoice, payer: string): Promise<{ fee: bigint; spendable: bigint; payable: boolean }> {
+  const [info, acc] = await Promise.all([buildPayCall(api, net, inv).paymentInfo(payer), api.query.system.account(payer)]);
+  const { free, reserved, frozen } = acc.data;
+  const ed = api.consts.balances.existentialDeposit.toBigInt();
+  const lockedOut = frozen.toBigInt() - reserved.toBigInt();
+  const untouchable = lockedOut > ed ? lockedOut : ed;
+  const spendable = free.toBigInt() > untouchable ? free.toBigInt() - untouchable : 0n;
+  const fee = info.partialFee.toBigInt();
+  return { fee, spendable, payable: spendable >= fee };
+}
+
 async function signAndSettle(
   api: ApiPromise,
   net: NetworkConfig,
