@@ -10,7 +10,7 @@ Pay in dollars on Portaldot V3 without spending the network token. The fee is pa
 - `apps/web/`: customer wallet (`/wallet`), merchant POS (`/pos`), merchant dashboard (`/dashboard`) and public stats (`/stats`), Next.js 16
 - `apps/indexer/`: indexes StableTap payments and refunds from finalized blocks into SQLite, serves history and stats, delivers signed webhooks
 - `contracts/`: `PotCheckout.sol` (Hardhat 3): invoice registry with replay guard, hold/capture, refunds, EIP-2612 permit, for pUSD through Portaldot's ERC-20 asset precompile
-- `packages/sdk/`: `@stabletap/sdk`, the engine as a publishable ESM package plus a React `<PayButton/>` (`apps/web` `/partner` uses it like a third-party app)
+- `packages/sdk/`: `@stabletap/sdk`, the engine as a publishable ESM package plus a React `<PayButton/>` (the `/developers` page uses it like a third-party app)
 
 ## Requirements
 
@@ -115,7 +115,7 @@ pnpm --filter @stabletap/sdk test             # builds, then tests the built out
 pnpm --filter @stabletap/sdk check:package    # publint + are-the-types-wrong
 ```
 
-The engine is bundled into the SDK; polkadot.js and React stay as dependencies/peers. See [packages/sdk/README.md](../packages/sdk/README.md). The web app's `/partner` page is a stand-in partner app whose checkout is only the SDK's `PayButton`.
+The engine is bundled into the SDK; polkadot.js and React stay as dependencies/peers. See [packages/sdk/README.md](../packages/sdk/README.md). The web app's `/developers` page shows the SDK's `PayButton` with the shop's own address filled in.
 
 ## Contract (MetaMask path)
 
@@ -148,6 +148,7 @@ pnpm --filter @stabletap/indexer test
 |---|---|
 | `GET /health` | cursor, finalized head, last error |
 | `GET /v1/stats` | payments, volume, refunds, fees paid in pUSD vs tPOT, payers, merchants, live pool reserves, latest 20 |
+| `GET /v1/payers/:address/records` | payments a customer signed and refunds sent to them (`limit`, default 20, max 100) |
 | `GET /v1/merchants/:address/records` | payments to and refunds by a merchant, with refunded totals (`limit`, `before`) |
 | `GET /v1/merchants/:address/webhook` | configured host and last deliveries (no secret, no full URL) |
 | `PUT` / `DELETE /v1/merchants/:address/webhook` | set or remove the webhook; body signed by the merchant key |

@@ -113,6 +113,13 @@ const MERCHANT_KEYS = `
   UNION
   SELECT block_number, extrinsic_index FROM records WHERE signer = :who AND kind = 'refund'`;
 
+/** A customer's history: payments they signed, and refunds sent to them. */
+const PAYER_KEYS = `
+  SELECT block_number, extrinsic_index FROM records WHERE signer = :who AND kind = 'payment'
+  UNION
+  SELECT block_number, extrinsic_index FROM transfers t
+    WHERE t.to_addr = :who AND EXISTS (SELECT 1 FROM records r WHERE r.block_number = t.block_number AND r.extrinsic_index = t.extrinsic_index AND r.kind = 'refund' AND r.signer != :who)`;
+
 export class Store {
   readonly db: DatabaseSync;
 
@@ -177,6 +184,15 @@ export class Store {
     return this.withTransfers(rows);
   }
 
+  payerRecords(who: string, limit: number): StoredRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT r.* FROM records r JOIN (${PAYER_KEYS}) k USING (block_number, extrinsic_index)
+         ORDER BY r.block_number DESC, r.extrinsic_index DESC LIMIT :limit`,
+      )
+      .all({ who, limit });
+    return this.withTransfers(rows);
+  }
   recentRecords(limit: number): StoredRecord[] {
     return this.withTransfers(this.db.prepare(`SELECT * FROM records ORDER BY block_number DESC, extrinsic_index DESC LIMIT ?`).all(limit));
   }

@@ -19,6 +19,10 @@ const startBlock = cfg.startBlock === "head" ? (await api.rpc.chain.getHeader(aw
 const indexer = await startIndexer(api, cfg.net, store, startBlock, log);
 const stopDelivery = startDelivery(store, cfg.allowInsecureWebhooks, log);
 const server = createApi({ store, net: cfg.net, api, status: indexer.status, corsOrigins: cfg.corsOrigins, allowInsecureWebhooks: cfg.allowInsecureWebhooks });
+// Caddy keeps idle upstream connections for up to 2 minutes. Node's default 5 s keep-alive closes them first,
+// so a reused connection gets reset mid-request. Outlive the proxy instead.
+server.keepAliveTimeout = 125_000;
+server.headersTimeout = 130_000;
 server.listen(cfg.port, cfg.host, () => log(`indexer API on http://${cfg.host}:${cfg.port}, indexing from #${indexer.status().nextBlock}`));
 if (cfg.allowInsecureWebhooks) log("WARNING: INDEXER_ALLOW_INSECURE_WEBHOOKS=1 (dev only): http and private webhook targets are allowed");
 

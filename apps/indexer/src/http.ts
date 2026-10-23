@@ -86,6 +86,13 @@ export function createApi(deps: ApiDeps): Server {
       }
     }
 
+    // A customer's own activity (public chain data, like the merchant view).
+    if (req.method === "GET" && parts[0] === "v1" && parts[1] === "payers" && parts[2] && parts[3] === "records" && parts.length === 4) {
+      const payer = addressParam(parts[2], deps.net.ss58);
+      const limit = intParam(url.searchParams.get("limit"), 20, 1, 100);
+      return send(res, 200, { payer, records: deps.store.payerRecords(payer, limit) });
+    }
+
     if (parts[0] === "v1" && parts[1] === "merchants" && parts[2]) {
       const merchant = addressParam(parts[2], deps.net.ss58);
       if (req.method === "GET" && parts.length === 4 && parts[3] === "records") {
