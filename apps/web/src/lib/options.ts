@@ -10,6 +10,17 @@ export interface AppOptions {
   split: Split | null;
   /** Other assets (with a native pool) a customer may pay with; swapped to the stablecoin in the same tx. */
   payAssets: number[];
+  /** MetaMask checkout through the PotCheckout contract. */
+  evm: EvmOptions | null;
+}
+
+export interface EvmOptions {
+  rpc: string;
+  chainId: number;
+  chainName: string;
+  checkout: `0x${string}`;
+  /** Block the contract was deployed in; history is read from here. */
+  fromBlock: bigint;
 }
 
 export function loadAppOptions(env: Record<string, string | undefined>, ss58: number): AppOptions {
@@ -32,7 +43,23 @@ export function loadAppOptions(env: Record<string, string | undefined>, ss58: nu
       return Number(x);
     });
   if (new Set(payAssets).size !== payAssets.length) throw new Error("NEXT_PUBLIC_STABLETAP_PAY_ASSETS has duplicates");
-  return { indexer, explorer, split, payAssets };
+  return { indexer, explorer, split, payAssets, evm: evmOptions(env) };
+}
+
+function evmOptions(env: Record<string, string | undefined>): EvmOptions | null {
+  const keys = ["NEXT_PUBLIC_STABLETAP_EVM_RPC", "NEXT_PUBLIC_STABLETAP_EVM_CHAIN_ID", "NEXT_PUBLIC_STABLETAP_CHECKOUT_ADDRESS", "NEXT_PUBLIC_STABLETAP_CHECKOUT_FROM_BLOCK"] as const;
+  const set = keys.filter((k) => env[k]?.trim());
+  if (set.length === 0) return null;
+  if (set.length !== keys.length) throw new Error(`Set all of ${keys.join(", ")}, or none`);
+  const rpc = url(env.NEXT_PUBLIC_STABLETAP_EVM_RPC, keys[0])!;
+  const chainId = env.NEXT_PUBLIC_STABLETAP_EVM_CHAIN_ID!.trim();
+  if (!/^\d{1,12}$/.test(chainId) || Number(chainId) < 1) throw new Error(`${keys[1]} must be a positive integer`);
+  const checkout = env.NEXT_PUBLIC_STABLETAP_CHECKOUT_ADDRESS!.trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(checkout)) throw new Error(`${keys[2]} must be a 0x address`);
+  const from = env.NEXT_PUBLIC_STABLETAP_CHECKOUT_FROM_BLOCK!.trim();
+  if (!/^\d{1,12}$/.test(from)) throw new Error(`${keys[3]} must be a block number`);
+  const chainName = env.NEXT_PUBLIC_STABLETAP_EVM_CHAIN_NAME?.trim() || "Portaldot V3 testnet";
+  return { rpc, chainId: Number(chainId), chainName, checkout: checkout as `0x${string}`, fromBlock: BigInt(from) };
 }
 
 function url(raw: string | undefined, key: string): string | null {

@@ -20,7 +20,7 @@ const csp = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' blob: data:",
   "font-src 'self'",
-  `connect-src 'self' ${net.ws}${opts.indexer ? ` ${new URL(opts.indexer).origin}` : ""}`,
+  `connect-src 'self' ${net.ws}${opts.indexer ? ` ${new URL(opts.indexer).origin}` : ""}${opts.evm ? ` ${new URL(opts.evm.rpc).origin}` : ""}`,
   "media-src 'self' blob:",
   "worker-src 'self' blob:",
   "object-src 'none'",

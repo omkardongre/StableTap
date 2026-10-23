@@ -78,6 +78,9 @@ Against another network, copy `apps/web/.env.example` to `apps/web/.env.local` a
 | `NEXT_PUBLIC_STABLETAP_INDEXER` | browser, optional | indexer API for `/dashboard`, `/stats`, webhooks (added to CSP `connect-src`) |
 | `NEXT_PUBLIC_STABLETAP_EXPLORER` | browser, optional | explorer base URL for tx links (`#/extrinsics/<block>-<index>`) |
 | `NEXT_PUBLIC_STABLETAP_PLATFORM_ADDRESS` / `_BPS` | browser, optional, both or neither | platform share split off every POS invoice (max 1000 bps) |
+| `NEXT_PUBLIC_STABLETAP_PAY_ASSETS` | browser, optional | other asset ids a customer may pay with (each needs a pool against tPOT) |
+| `FAUCET_ALT_ASSET_ID` / `FAUCET_ALT_AMOUNT` | server only, optional | faucet hands out this asset instead of pUSD |
+| `NEXT_PUBLIC_STABLETAP_EVM_RPC` / `_EVM_CHAIN_ID` / `_CHECKOUT_ADDRESS` / `_CHECKOUT_FROM_BLOCK` | browser, optional, all or none | MetaMask checkout through `PotCheckout` (RPC added to CSP `connect-src`) |
 
 POS invoices expire 5 minutes after creation, measured in chain time. The wallet refuses expired invoices and invoices it has already paid; the POS keeps watching for 60 s after expiry in case a payment was already sent.
 
@@ -93,6 +96,14 @@ pnpm --filter @stabletap/web test
 Pay with any token: with `NEXT_PUBLIC_STABLETAP_PAY_ASSETS` set, a customer short of pUSD can pay with another asset that has a pool against tPOT. One extrinsic swaps it for exactly the invoice amount of pUSD (`assetConversion.swapTokensForExactTokens`, route token → tPOT → pUSD, capped at quote + 1%), forwards the shares and adds the memo; the fee is paid in that token. The merchant, watcher and indexer see an ordinary pUSD payment.
 
 Split payments: with a platform share set, the customer still pays the invoice amount. One extrinsic sends the merchant `amount − share` and the platform `share` (rounded down). The platform account must already exist on chain and hold at least the asset's minimum balance, like any receiver of a non-sufficient asset.
+
+Tap to pay (needs the indexer): in POS settings, "Set up tap to pay" registers the POS as a terminal and shows its fixed link `/tap/<id>`. Write it once to an NFC sticker (the POS writes it with Web NFC in Chrome on Android, or use any NFC app) or print it as a QR. Phones open a URL tag natively, so the customer needs no app. While a sale runs, the POS publishes its payment link for that terminal; the tag page opens it in the wallet, which checks it like a scanned QR. A terminal only accepts links that pay its own merchant and expire within 15 minutes; its write token stays on the POS (only a SHA-256 hash is stored), and a charge is dropped once it is paid on chain or expires.
+
+Fee contrast: before paying, the wallet shows what the same payment would need with the usual tPOT fee (`nativeFeeCheck`). A wallet holding only the deposit can spend 0 tPOT, so that path would fail; the node rejects it with `1010 Inability to pay some fees` (checked in the fork test).
+
+Pool gauge: when a customer pays with another token, the wallet shows the live reserves of the pools the swap goes through, read at every finalized block, with the change since the confirm screen opened.
+
+MetaMask checkout (`/checkout`, needs the `NEXT_PUBLIC_STABLETAP_EVM_*` and checkout variables): finds browser wallets with EIP-6963, adds or switches to the Portaldot EVM chain, and pays or holds pUSD in `PotCheckout` with one EIP-2612 permit signature plus one transaction. The shop side lists holds and payments from the contract's events and can capture (the rest returns to the payer), release a hold, or refund. Each write is simulated first, so contract errors (replay, expiry, amount) are shown before the wallet prompt.
 
 Dashboard (`/dashboard`): uses this device's wallet as the shop's payout account. It lists invoices matched by memo (merchant share, platform share, fee in pUSD, refunds), shows today's takings, refunds a payment (full or partial, up to what's left) with a passkey-signed refund that also pays its fee in pUSD, and registers a webhook. "Team wallet" sends takings to a pallet-multisig account (e.g. 2 of 3); the address is derived from the signatories and threshold, and a new team account is activated once through the faucet.
 
@@ -139,6 +150,9 @@ pnpm --filter @stabletap/indexer test
 | `GET /v1/merchants/:address/records` | payments to and refunds by a merchant, with refunded totals (`limit`, `before`) |
 | `GET /v1/merchants/:address/webhook` | configured host and last deliveries (no secret, no full URL) |
 | `PUT` / `DELETE /v1/merchants/:address/webhook` | set or remove the webhook; body signed by the merchant key |
+| `POST /v1/terminals` | register a tap terminal for `{ merchant }`; returns its id and a write token (shown once) |
+| `GET /v1/terminals/:id/charge` | `{ charge }`: the open charge behind a counter tag, or `null` (dropped once paid or expired) |
+| `PUT` / `DELETE /v1/terminals/:id/charge` | publish or withdraw the current charge; `Authorization: Bearer <token>` |
 
 Webhooks follow [Standard Webhooks](https://www.standardwebhooks.com/): headers `webhook-id`, `webhook-timestamp`, `webhook-signature: v1,<base64 HMAC-SHA256>`, events `payment.succeeded` and `refund.succeeded`, sent once the block is final.
 

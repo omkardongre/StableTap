@@ -20,6 +20,9 @@ export default function Home() {
       <Link className="btn" href="/partner">
         Demo partner app (Pay button)
       </Link>
+      <Link className="btn" href="/checkout">
+        MetaMask checkout (hold and capture)
+      </Link>
     </section>
   );
 }
