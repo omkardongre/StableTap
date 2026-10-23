@@ -31,8 +31,12 @@ const csp = [
   ...(net.ws.startsWith("wss://") ? ["upgrade-insecure-requests"] : []),
 ].join("; ");
 
+// One id per build, baked into the page bundle and the /api/version route, so an open tab can tell a new deploy went out.
+const buildId = process.env.VERCEL_DEPLOYMENT_ID || process.env.VERCEL_GIT_COMMIT_SHA || Date.now().toString(36);
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  env: { NEXT_PUBLIC_BUILD_ID: buildId },
   poweredByHeader: false,
   typedRoutes: true,
   async headers() {

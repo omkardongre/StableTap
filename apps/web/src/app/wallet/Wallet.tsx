@@ -3,17 +3,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { mnemonicGenerate } from "@polkadot/util-crypto";
 import {
-  InvoiceExpiredError, assertNotExpired, chainNow, decodeInvoice, getBalances, nativeFeeCheck, pay, payWithAsset, quoteFee, quoteSwapPay, splitAmounts,
+  InvoiceExpiredError, assertNotExpired, chainNow, decodeInvoice, pay, payWithAsset, quoteFee, quoteSwapPay,
   type Invoice, type Receipt, type SwapQuote,
 } from "@stabletap/engine";
 import { formatAmount } from "@stabletap/engine/config";
 import { PoolGauge, type PoolAsset } from "@/components/PoolGauge";
 import { Scanner } from "@/components/Scanner";
 import { getApi } from "@/lib/chain";
-import { errorText, shortHash, tpot, usd } from "@/lib/format";
+import Link from "next/link";
+import { errorText, usd, usdFee, whenText } from "@/lib/format";
+import { fetchPayerRecords, indexerEnabled, type IndexedRecord } from "@/lib/indexer";
 import { pairFrom, withUnlockedPair } from "@/lib/keys";
-import { NATIVE_SYMBOL, STABLE_SYMBOL, network } from "@/lib/network";
-import { findPaid, recordPaid } from "@/lib/paid";
+import { STABLE_SYMBOL, network } from "@/lib/network";
+import { findPaid, paidNames, recentPayments, recordPaid, type RecentPayment } from "@/lib/paid";
 import { usePayAssets, type PayAsset } from "@/lib/payAssets";
 import { useBalances } from "@/lib/useBalances";
 import { createVault, loadVault, passkeyPrfSupported, unlockVault, type VaultRecord } from "@/lib/vault";
@@ -23,9 +25,10 @@ type View =
   | { name: "setup"; supported: boolean }
   | { name: "home" }
   | { name: "scan" }
-  | { name: "confirm"; invoice: Invoice; fee: bigint | null; native: NativeCheck | null; alts: AltQuote[] }
+  | { name: "paste" }
+  | { name: "confirm"; invoice: Invoice; fee: bigint | null; alts: AltQuote[] }
   | { name: "paying"; invoice: Invoice; stage: string; via: PayAsset | null }
-  | { name: "receipt"; invoice: Invoice; receipt: Receipt; nativeSpent: bigint; paidWith: PaidWith | null }
+  | { name: "receipt"; invoice: Invoice; receipt: Receipt; paidWith: PaidWith | null }
   | { name: "phrase"; phrase: string };
 
 /** Paying a pUSD invoice with another token, swapped on the way. */
@@ -35,7 +38,8 @@ interface AltQuote {
   error: string | null;
 }
 
-type NativeCheck = Awaited<ReturnType<typeof nativeFeeCheck>>;
+/** A payment link waiting for this new wallet (survives the passkey prompt and a reload). */
+const PENDING_KEY = "stabletap.pending-pay.v1";
 
 interface PaidWith {
   id: number;
@@ -52,7 +56,38 @@ export function Wallet() {
   const [view, setView] = useState<View>({ name: "loading" });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Which faucet button is waiting: the stablecoin ("stable") or another asset id.
+  const [funding, setFunding] = useState<"stable" | number | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [recent, setRecent] = useState<RecentPayment[]>([]);
+  // The same history from the chain: covers other devices and refunds the shop sent back.
+  const [chainRecent, setChainRecent] = useState<IndexedRecord[] | null>(null);
+  // A payment link opened before this person had a wallet: kept until they can pay it.
+  const [pending, setPending] = useState<{ link: string; invoice: Invoice } | null>(null);
+  // Refresh the list whenever the wallet comes back to its home screen (e.g. after a payment).
+  useEffect(() => {
+    if (view.name !== "home") return setNotice(null);
+    try {
+      setRecent(recentPayments());
+    } catch {
+      setRecent([]);
+    }
+  }, [view.name]);
   const { balances, error: balanceError } = useBalances(vault?.address ?? null);
+  useEffect(() => {
+    if (view.name !== "home" || !vault || !indexerEnabled()) return;
+    let live = true;
+    const load = () =>
+      fetchPayerRecords(vault.address, 10)
+        .then((r) => live && setChainRecent(r))
+        .catch(() => undefined);
+    void load();
+    const t = setInterval(load, 15_000);
+    return () => {
+      live = false;
+      clearInterval(t);
+    };
+  }, [view.name, vault]);
   const { assets: payAssets, error: assetError } = usePayAssets(vault?.address ?? null);
 
   const openInvoice = useCallback(
@@ -67,19 +102,19 @@ export function Wallet() {
       }
       try {
         const paidTx = findPaid(invoice.to, invoice.id);
-        if (paidTx) throw new Error(`Rejected: this invoice is already paid (tx ${shortHash(paidTx)})`);
+        if (paidTx) throw new Error("You already paid this. Ask the shop for a new code if needed.");
         const api = await getApi();
         assertNotExpired(invoice, await chainNow(api));
       } catch (e) {
         setView({ name: "home" });
-        return setError(e instanceof InvoiceExpiredError ? "Rejected: this invoice has expired. Ask the shop for a new one." : errorText(e));
+        return setError(e instanceof InvoiceExpiredError ? "This payment code has expired. Ask the shop for a new one." : errorText(e));
       }
       // Other tokens are offered by the effect below, as their balances load.
-      setView({ name: "confirm", invoice, fee: null, native: null, alts: [] });
+      setView({ name: "confirm", invoice, fee: null, alts: [] });
       const api = await getApi();
       try {
-        const [fee, native] = await Promise.all([quoteFee(api, network, invoice, address), nativeFeeCheck(api, network, invoice, address)]);
-        setView((v) => (v.name === "confirm" && v.invoice.id === invoice.id ? { ...v, fee, native } : v));
+        const fee = await quoteFee(api, network, invoice, address);
+        setView((v) => (v.name === "confirm" && v.invoice.id === invoice.id ? { ...v, fee } : v));
       } catch (e) {
         setError(`Could not estimate the fee: ${errorText(e)}`);
       }
@@ -115,13 +150,34 @@ export function Wallet() {
     (async () => {
       try {
         const stored = loadVault();
-        if (!stored) return setView({ name: "setup", supported: await passkeyPrfSupported() });
+        const params = new URLSearchParams(window.location.search);
+        const incoming = params.get("pay");
+        if (incoming) window.history.replaceState(null, "", window.location.pathname);
+        if (!stored) {
+          // New customer from a payment link: create the wallet first, then come back to this payment.
+          const keep = incoming ?? sessionStorage.getItem(PENDING_KEY);
+          if (keep) {
+            try {
+              setPending({ link: keep, invoice: decodeInvoice(keep, network.ss58) });
+              sessionStorage.setItem(PENDING_KEY, keep);
+            } catch {
+              sessionStorage.removeItem(PENDING_KEY);
+            }
+          }
+          return setView({ name: "setup", supported: await passkeyPrfSupported() });
+        }
         setVault(stored);
         setView({ name: "home" });
-        // Payment links opened directly (e.g. from an NFC tag): /wallet?pay=<portaldot:pay?...>
-        const link = new URLSearchParams(window.location.search).get("pay");
-        if (link) {
-          window.history.replaceState(null, "", window.location.pathname);
+        // Payment links opened directly (e.g. from an NFC tag or a checkout page): /wallet?pay=<portaldot:pay?...>
+        const link = incoming ?? sessionStorage.getItem(PENDING_KEY);
+        if (link && !incoming) {
+          // Left over from wallet setup: finish it once there are dollars to pay with (effect below).
+          try {
+            setPending({ link, invoice: decodeInvoice(link, network.ss58) });
+          } catch {
+            sessionStorage.removeItem(PENDING_KEY);
+          }
+        } else if (link) {
           await openInvoice(link, stored.address);
         }
       } catch (e) {
@@ -130,6 +186,16 @@ export function Wallet() {
       }
     })();
   }, [openInvoice]);
+
+  // Continue a payment that started before the wallet existed, as soon as the balance can cover it.
+  useEffect(() => {
+    if (!pending || !vault || !balances || view.name !== "home") return;
+    if (balances.stable < pending.invoice.amount) return;
+    sessionStorage.removeItem(PENDING_KEY);
+    const link = pending.link;
+    setPending(null);
+    void openInvoice(link, vault.address);
+  }, [pending, vault, balances, view.name, openInvoice]);
 
   async function create() {
     setBusy(true);
@@ -149,28 +215,37 @@ export function Wallet() {
 
   async function fund(asset?: number) {
     if (!vault) return;
-    setBusy(true);
+    setFunding(asset ?? "stable");
     setError(null);
+    setNotice(null);
     try {
-      const res = await fetch("/api/faucet", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ address: vault.address, asset }) });
+      const res = await fetch("/api/faucet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: vault.address, asset }),
+        signal: AbortSignal.timeout(90_000),
+      }).catch(() => {
+        throw new Error("The test network didn't answer in time. Please try again.");
+      });
       const body = (await res.json()) as { error?: string };
       if (!res.ok) throw new Error(body.error ?? `Faucet error ${res.status}`);
+      setNotice(asset === undefined ? "+$20 test dollars added" : "Test coins added");
     } catch (e) {
       setError(errorText(e));
     } finally {
-      setBusy(false);
+      setFunding(null);
     }
   }
 
   async function confirmPay(invoice: Invoice, alt?: { asset: PayAsset; quote: SwapQuote }) {
     if (!vault || !balances) return;
     setError(null);
-    const nativeBefore = balances.native;
     try {
       const via = alt?.asset ?? null;
       setView({ name: "paying", invoice, stage: "Confirm with your fingerprint…", via });
+      // Chain stages (signed, in a block, final) mean nothing to a shopper: after the fingerprint it's just "Paying…".
       const api = await getApi();
-      const onStage = (stage: string) => setView({ name: "paying", invoice, via, stage: stage === "signed" ? "Sending…" : "In a block, waiting for finality…" });
+      const onStage = () => setView({ name: "paying", invoice, via, stage: "Paying…" });
       let paidWith: PaidWith | null = null;
       const receipt = await withUnlockedPair(vault, async (pair) => {
         if (!alt) return pay(api, network, invoice, pair, onStage);
@@ -178,13 +253,12 @@ export function Wallet() {
         paidWith = { id: alt.asset.id, symbol: alt.asset.symbol, decimals: alt.asset.decimals, spent: r.spentIn, fee: r.feePaid };
         return r;
       });
-      recordPaid(invoice.to, invoice.id, receipt.txHash);
-      const after = await getBalances(api, network, vault.address, receipt.blockHash);
-      setView({ name: "receipt", invoice, receipt, nativeSpent: nativeBefore - after.native, paidWith });
+      recordPaid(invoice.to, invoice.id, receipt.txHash, { merchant: invoice.merchant, amount: invoice.amount });
+      setView({ name: "receipt", invoice, receipt, paidWith });
     } catch (e) {
       if (e instanceof InvoiceExpiredError) {
         setView({ name: "home" });
-        return setError("Rejected: this invoice has expired. Ask the shop for a new one.");
+        return setError("This payment code has expired. Ask the shop for a new one.");
       }
       setError(errorText(e));
       setView({ name: "home" });
@@ -202,6 +276,7 @@ export function Wallet() {
   }
 
   const alert = error ?? balanceError ?? assetError;
+  const activity = vault ? toActivity(chainRecent, recent, vault.address) : [];
   const empty = balances !== null && balances.native === 0n && balances.stable === 0n;
   // Pools a swap payment moves: shown from the choice to the receipt, so the change is visible.
   const swapAssets: PoolAsset[] =
@@ -216,12 +291,17 @@ export function Wallet() {
 
   return (
     <section className="stack" aria-live="polite">
-      <div className="row">
-        <h1>Wallet</h1>
-      </div>
+      {/* The active "Wallet" tab already names the page; keep a heading for screen readers only. */}
+      <h1 className="sr-only">Wallet</h1>
       {alert && (
         <p className="alert" role="alert">
           {alert}
+        </p>
+      )}
+
+      {notice && view.name === "home" && (
+        <p className="notice" role="status">
+          {notice}
         </p>
       )}
 
@@ -230,10 +310,10 @@ export function Wallet() {
       {view.name === "setup" && (
         <div className="card">
           <h2>Create your wallet</h2>
-          <p className="muted">Your key is created on this phone and locked by your fingerprint or face. It never leaves the device.</p>
+          <p className="muted">Pay shops in dollars. Secured with your fingerprint.</p>
           {view.supported ? (
             <button className="btn primary" onClick={create} disabled={busy}>
-              {busy ? "Creating…" : "Create wallet"}
+              {busy ? "Creating…" : "Create my wallet"}
             </button>
           ) : (
             <p className="alert">This browser can&apos;t lock a key with a passkey. Use Chrome on Android or Safari 18+ on iPhone.</p>
@@ -244,7 +324,14 @@ export function Wallet() {
       {vault && view.name === "home" && (
         <>
           <div className="card">
-            <span className="label">Balance</span>
+            <div className="row">
+              <span className="label">Balance</span>
+              {!empty && balances && (
+                <button type="button" className="pill-btn" onClick={() => void fund()} disabled={funding !== null}>
+                  {funding === "stable" ? "Adding…" : "+ Add money"}
+                </button>
+              )}
+            </div>
             <span className="big">{balances ? usd(balances.stable) : "…"}</span>
             {payAssets
               .filter((a) => a.balance > 0n)
@@ -253,49 +340,104 @@ export function Wallet() {
                   {amt(a.balance, a)}
                 </span>
               ))}
-            <span className="muted small">
-              {balances ? `${tpot(balances.native)} ${NATIVE_SYMBOL} (one-time account deposit, never spent)` : "Connecting…"}
-            </span>
+            {!balances && <span className="muted small">Connecting…</span>}
           </div>
-          {empty && (
-            <button className="btn" onClick={() => void fund()} disabled={busy}>
-              {busy ? "Requesting…" : "Get 20 test dollars"}
+          {pending && (
+            <div className="notice" role="status">
+              <strong>
+                Paying {pending.invoice.merchant ?? "a shop"} {usd(pending.invoice.amount)}
+              </strong>
+              <span className="small">Add dollars to your wallet and the payment opens right away.</span>
+            </div>
+          )}
+          {empty ? (
+            <>
+              <button className="btn primary" onClick={() => void fund()} disabled={funding !== null}>
+                {funding === "stable" ? "Adding dollars…" : "Get 20 free test dollars"}
+              </button>
+              <p className="muted small center">{funding !== null ? "This takes up to a minute." : "Add dollars first, then scan a shop's code to pay."}</p>
+              {payAssets.length > 0 && (
+                <details className="more">
+                  <summary>More options</summary>
+                  {payAssets.map((a) => (
+                    <button key={a.id} className="btn" onClick={() => void fund(a.id)} disabled={funding !== null}>
+                      {funding === a.id ? "Adding…" : `Get test ${a.symbol} instead`}
+                    </button>
+                  ))}
+                </details>
+              )}
+            </>
+          ) : (
+            <button
+              className="btn primary"
+              onClick={() => setView({ name: "scan" })}
+              disabled={!balances || (balances.stable === 0n && !payAssets.some((a) => a.balance > 0n))}
+            >
+              Scan to pay
             </button>
           )}
-          {empty &&
-            payAssets.map((a) => (
-              <button key={a.id} className="btn" onClick={() => void fund(a.id)} disabled={busy}>
-                {busy ? "Requesting…" : `Get test ${a.symbol} instead`}
+          {activity.length > 0 && (
+            <div className="card">
+              <h2 className="card-title">Recent</h2>
+              <ul className="activity">
+                {activity.map((a) => (
+                  <li key={a.key}>
+                    <span>
+                      <strong>{a.title}</strong>
+                      <span className="muted small">
+                        {a.refund ? "Refund · " : ""}
+                        {whenText(a.at)}
+                      </span>
+                    </span>
+                    <span className={`amount${a.refund ? " plus" : ""}`}>
+                      {a.refund ? "+" : "−"}
+                      {usd(a.amount)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <details className="card">
+            <summary>Account and backup</summary>
+            <div className="stack">
+              <span className="label">Your address</span>
+              <span className="mono small">{vault.address}</span>
+              <button className="btn" onClick={() => navigator.clipboard.writeText(vault.address)}>
+                Copy address
               </button>
-            ))}
-          <button
-            className="btn primary"
-            onClick={() => setView({ name: "scan" })}
-            disabled={!balances || (balances.stable === 0n && !payAssets.some((a) => a.balance > 0n))}
-          >
-            Scan to pay
-          </button>
-          <div className="card">
-            <span className="label">Your address</span>
-            <span className="mono small">{vault.address}</span>
-            <button className="btn" onClick={() => navigator.clipboard.writeText(vault.address)}>
-              Copy address
-            </button>
-            <button className="btn" onClick={showPhrase}>
-              Show recovery phrase
-            </button>
-          </div>
+              <button className="btn" onClick={showPhrase}>
+                Show recovery phrase
+              </button>
+              <Link className="link-btn" href="/business">
+                Have a shop? Open StableTap Business
+              </Link>
+            </div>
+          </details>
         </>
       )}
 
       {vault && view.name === "scan" && (
-        <>
-          <Scanner onResult={(text) => void openInvoice(text, vault.address)} />
+        <Scanner
+          title="Scan the shop's QR code"
+          hint="Point your camera at the code on the shop's screen."
+          onResult={(text) => void openInvoice(text, vault.address)}
+          onCancel={() => setView({ name: "home" })}
+          extra={
+            <button type="button" className="scanner-link" onClick={() => setView({ name: "paste" })}>
+              Paste a payment link instead
+            </button>
+          }
+        />
+      )}
+
+      {vault && view.name === "paste" && (
+        <div className="card">
           <PasteLink onSubmit={(text) => void openInvoice(text, vault.address)} />
           <button className="btn" onClick={() => setView({ name: "home" })}>
             Cancel
           </button>
-        </>
+        </div>
       )}
 
       {view.name === "confirm" && (
@@ -303,33 +445,9 @@ export function Wallet() {
           <span className="label">Pay {view.invoice.merchant ?? "merchant"}</span>
           <span className="big">{usd(view.invoice.amount)}</span>
           <dl className="kv">
-            <dt>Network fee</dt>
-            <dd>{view.fee === null ? "estimating…" : `≈ ${usd(view.fee)}`}</dd>
-            <dt>Paid in</dt>
-            <dd>dollars (not {NATIVE_SYMBOL})</dd>
-            {view.native && (
-              <>
-                <dt>With a {NATIVE_SYMBOL} fee</dt>
-                <dd className={view.native.payable ? undefined : "bad"}>
-                  {view.native.payable
-                    ? `≈ ${tpot(view.native.fee)} ${NATIVE_SYMBOL}`
-                    : `would fail: needs ${tpot(view.native.fee)} ${NATIVE_SYMBOL}, you can spend ${tpot(view.native.spendable)}`}
-                </dd>
-              </>
-            )}
-            <dt>Invoice</dt>
-            <dd className="mono small">{view.invoice.id}</dd>
-            {view.invoice.split && (
-              <>
-                <dt>Shop gets</dt>
-                <dd>{usd(splitAmounts(view.invoice).merchant)}</dd>
-                <dt>Platform fee ({view.invoice.split.bps / 100}%)</dt>
-                <dd>{usd(splitAmounts(view.invoice).platform)}</dd>
-              </>
-            )}
+            <dt>Fee</dt>
+            <dd>{view.fee === null ? "…" : usdFee(view.fee)}</dd>
           </dl>
-          <span className="muted small mono">To {view.invoice.to}</span>
-          {view.invoice.split && <span className="muted small mono">Platform {view.invoice.split.to}</span>}
           <button
             className="btn primary"
             onClick={() => void confirmPay(view.invoice)}
@@ -338,7 +456,7 @@ export function Wallet() {
             Pay with fingerprint
           </button>
           {view.fee !== null && balances && balances.stable < view.invoice.amount + view.fee && (
-            <p className={view.alts.length ? "muted small" : "alert"}>Not enough dollars for this payment and its fee{view.alts.length ? ". You can pay with another token:" : "."}</p>
+            <p className={view.alts.length ? "muted small" : "alert"}>Not enough dollars for this payment{view.alts.length ? ". You can pay with another coin you hold:" : "."}</p>
           )}
           {view.alts.map(({ asset, quote, error: altError }) => {
             const enough = quote !== null && asset.balance >= quote.maxIn + quote.fee;
@@ -349,14 +467,12 @@ export function Wallet() {
                   <dd>{quote ? `≈ ${amt(quote.expectedIn, asset)}` : altError ? "unavailable" : "quoting…"}</dd>
                   {quote && (
                     <>
-                      <dt>At most</dt>
-                      <dd>{amt(quote.maxIn, asset)}</dd>
-                      <dt>Network fee</dt>
+                      <dt>Fee</dt>
                       <dd>≈ {amt(quote.fee, asset)}</dd>
                     </>
                   )}
                 </dl>
-                <span className="muted small">The invoice is still paid in exactly {usd(view.invoice.amount)}; the pool swaps your {asset.symbol} on the way.</span>
+                <span className="muted small">The shop still receives exactly {usd(view.invoice.amount)}. Your {asset.symbol} is converted automatically.</span>
                 <button className="btn" onClick={() => quote && void confirmPay(view.invoice, { asset, quote })} disabled={!enough}>
                   Pay with fingerprint ({asset.symbol})
                 </button>
@@ -375,7 +491,10 @@ export function Wallet() {
         <div className="card" aria-busy="true">
           <span className="label">Paying {view.invoice.merchant ?? "merchant"}</span>
           <span className="big">{usd(view.invoice.amount)}</span>
-          <p>{view.stage}</p>
+          <p className="row-start">
+            {view.stage === "Paying…" && <span className="spinner dark" aria-hidden="true" />}
+            {view.stage}
+          </p>
         </div>
       )}
 
@@ -396,24 +515,21 @@ export function Wallet() {
                 </>
               ) : (
                 <>
-                  <dt>Fee (in dollars)</dt>
-                  <dd>{usd(view.receipt.feePaid)}</dd>
+                  <dt>Fee</dt>
+                  <dd>{usdFee(view.receipt.feePaid)}</dd>
                 </>
               )}
-              <dt>{NATIVE_SYMBOL} spent</dt>
-              <dd>{tpot(view.nativeSpent)}</dd>
-              <dt>Block</dt>
-              <dd>#{view.receipt.blockNumber} (final)</dd>
-              <dt>Invoice</dt>
-              <dd className="mono small">{view.invoice.id}</dd>
+              <dt>Time</dt>
+              <dd>{whenText(Date.now())}</dd>
             </dl>
-            <span className="label">Transaction</span>
-            <span className="mono small" title={view.receipt.txHash}>
-              {shortHash(view.receipt.txHash)}
-            </span>
-            <button className="btn" onClick={() => navigator.clipboard.writeText(view.receipt.txHash)}>
-              Copy tx hash
-            </button>
+            <details>
+              <summary>Receipt details</summary>
+              <dl className="kv small">
+                <dt>Order</dt>
+                <dd className="mono">{view.invoice.id}</dd>
+              </dl>
+              <CopyButton text={view.receipt.txHash} label="Copy transaction ID" />
+            </details>
           </div>
           <button className="btn primary" onClick={() => setView({ name: "home" })}>
             Done
@@ -421,7 +537,12 @@ export function Wallet() {
         </>
       )}
 
-      {gaugeAssets.length > 0 && <PoolGauge assets={gaugeAssets} />}
+      {gaugeAssets.length > 0 && (
+        <details>
+          <summary>See how the conversion moved the market</summary>
+          <PoolGauge assets={gaugeAssets} />
+        </details>
+      )}
 
       {view.name === "phrase" && (
         <div className="card">
@@ -448,12 +569,52 @@ function PasteLink({ onSubmit }: { onSubmit: (text: string) => void }) {
       }}
     >
       <label className="label" htmlFor="paylink">
-        Or paste a payment link
+        Or paste a payment link from the shop
       </label>
-      <input id="paylink" value={text} onChange={(e) => setText(e.target.value)} placeholder="portaldot:pay?…" autoComplete="off" />
+      <input id="paylink" value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste link here" autoComplete="off" />
       <button className="btn" type="submit" disabled={!text.trim()}>
         Open link
       </button>
     </form>
+  );
+}
+
+interface Activity {
+  key: string;
+  title: string;
+  refund: boolean;
+  at: number;
+  amount: bigint;
+}
+
+/** Payments and refunds from the chain, plus payments from this device the history hasn't caught up with yet. */
+function toActivity(chain: IndexedRecord[] | null, local: RecentPayment[], me: string): Activity[] {
+  const names = (() => {
+    try {
+      return paidNames();
+    } catch {
+      return new Map<string, string>();
+    }
+  })();
+  const seen = new Set<string>();
+  const out: Activity[] = [];
+  for (const r of chain ?? []) {
+    const refund = r.kind === "refund";
+    // A swap payment first moves dollars from the pool to the payer; only what leaves the payer counts.
+    const amount = r.transfers.filter((t) => (refund ? t.to === me : t.from === me)).reduce((sum, t) => sum + t.amount, 0n);
+    if (amount === 0n) continue;
+    seen.add(r.txHash);
+    out.push({ key: r.txHash, title: names.get(r.invoiceId) ?? "Shop", refund, at: r.timestamp, amount });
+  }
+  for (const p of local) if (!seen.has(p.txHash)) out.push({ key: p.txHash, title: p.merchant, refund: false, at: p.at, amount: p.amount });
+  return out.sort((a, b) => b.at - a.at).slice(0, 8);
+}
+
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button type="button" className="btn" onClick={() => void navigator.clipboard.writeText(text).then(() => setCopied(true))}>
+      {copied ? "Copied" : label}
+    </button>
   );
 }

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { errorText, shortHash, tpot, usd } from "@/lib/format";
 import { fetchStats, indexerEnabled, type Stats as StatsData } from "@/lib/indexer";
-import { NATIVE_SYMBOL, explorerLink, network } from "@/lib/network";
+import { NATIVE_SYMBOL, network } from "@/lib/network";
 
 const REFRESH_MS = 10_000;
 
@@ -71,7 +71,6 @@ export function Stats() {
             <ul className="list">
               {stats.recent.map((r) => {
                 const amount = r.transfers.reduce((s, t) => s + t.amount, 0n);
-                const link = explorerLink(r.blockNumber, r.extrinsicIndex);
                 return (
                   <li key={r.txHash} className="list-item">
                     <div className="row">
@@ -85,13 +84,10 @@ export function Stats() {
                       <span>
                         fee {feeText(r.fee)}
                       </span>
-                      {link ? (
-                        <a className="mono" href={link} target="_blank" rel="noreferrer">
-                          {shortHash(r.txHash)}
-                        </a>
-                      ) : (
-                        <span className="mono">{shortHash(r.txHash)}</span>
-                      )}
+                      {/* No explorer link: the Portaldot explorer doesn't list transactions whose fee is paid in a token. */}
+                      <span className="mono" title={r.txHash}>
+                        {shortHash(r.txHash)}
+                      </span>
                     </div>
                   </li>
                 );

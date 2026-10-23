@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import { TopBar } from "@/components/TopBar";
+import { UpdateBanner } from "@/components/UpdateBanner";
 import "./globals.css";
 
 // Self-hosted at build time by next/font, so the CSP's font-src 'self' still holds.
@@ -23,6 +24,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <TopBar />
         <main className="shell">{children}</main>
+        <UpdateBanner />
       </body>
     </html>
   );

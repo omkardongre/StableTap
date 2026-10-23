@@ -21,7 +21,9 @@ export interface VaultRecord {
 }
 
 const HKDF_INFO = new TextEncoder().encode("stabletap/vault/v1");
-const STORAGE_KEY = "stabletap.vault.v1";
+/** A device can hold a personal wallet (customer) and a separate shop wallet (business). */
+export type VaultKind = "personal" | "shop";
+const STORAGE_KEYS: Record<VaultKind, string> = { personal: "stabletap.vault.v1", shop: "stabletap.shop-vault.v1" };
 const RP_NAME = "StableTap";
 
 // ---------- pure crypto (also runs in Node for tests) ----------
@@ -94,22 +96,27 @@ export async function passkeyPrfSupported(): Promise<boolean> {
   return PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
 }
 
-export function loadVault(): VaultRecord | null {
-  const raw = localStorage.getItem(STORAGE_KEY);
+export function loadVault(kind: VaultKind = "personal"): VaultRecord | null {
+  const raw = localStorage.getItem(STORAGE_KEYS[kind]);
   return raw ? parseRecord(raw) : null;
 }
 
-export function removeVault(): void {
-  localStorage.removeItem(STORAGE_KEY);
+export function removeVault(kind: VaultKind = "personal"): void {
+  localStorage.removeItem(STORAGE_KEYS[kind]);
 }
 
 /** Create a platform passkey, take its PRF secret and store the sealed phrase. */
-export async function createVault(mnemonic: string, address: string): Promise<VaultRecord> {
+export async function createVault(mnemonic: string, address: string, kind: VaultKind = "personal", label?: string): Promise<VaultRecord> {
   const prfSalt = crypto.getRandomValues(new Uint8Array(32));
   const cred = (await navigator.credentials.create({
     publicKey: {
       rp: { name: RP_NAME },
-      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: `StableTap ${address.slice(0, 6)}…${address.slice(-4)}`, displayName: "StableTap wallet" },
+      // The password manager shows these names; use words people recognise, not the address.
+      user: {
+        id: crypto.getRandomValues(new Uint8Array(16)),
+        name: kind === "shop" ? `${label ?? "My shop"} · StableTap shop` : "StableTap wallet",
+        displayName: kind === "shop" ? (label ?? "My shop") : "StableTap wallet",
+      },
       challenge: crypto.getRandomValues(new Uint8Array(32)),
       pubKeyCredParams: [
         { type: "public-key", alg: -7 },
@@ -130,7 +137,7 @@ export async function createVault(mnemonic: string, address: string): Promise<Va
   const prf = first ? toBytes(first) : await evaluatePrf(credentialId, prfSalt);
 
   const record = await seal(mnemonic, prf, { address, credentialId, prfSalt: b64u(prfSalt) });
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(record));
+  localStorage.setItem(STORAGE_KEYS[kind], JSON.stringify(record));
   await navigator.storage?.persist?.().catch(() => false);
   return record;
 }

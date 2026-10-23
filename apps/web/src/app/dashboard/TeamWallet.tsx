@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { buildTransferCall, multisigAddress, quoteCallFee, transferStable, type MultisigSpec } from "@stabletap/engine";
 import { parseAmount } from "@stabletap/engine/config";
 import { getApi } from "@/lib/chain";
-import { errorText, shortHash, usd } from "@/lib/format";
+import { errorText, shortHash, usd, usdFee } from "@/lib/format";
 import { withUnlockedPair } from "@/lib/keys";
 import { network } from "@/lib/network";
 import { useBalances } from "@/lib/useBalances";
@@ -50,7 +50,7 @@ export function TeamWallet({ vault, suggested }: { vault: VaultRecord; suggested
   }, []);
 
   useEffect(() => {
-    if (suggested > 0n && amount === "") setAmount(usd(suggested).slice(1));
+    if (suggested > 0n && amount === "") setAmount(usd(suggested).slice(1).replace(/,/g, ""));
   }, [suggested, amount]);
 
   useEffect(() => {
@@ -87,11 +87,11 @@ export function TeamWallet({ vault, suggested }: { vault: VaultRecord; suggested
     try {
       const value = parseAmount(amount, network.decimals);
       if (value <= 0n) throw new Error("Amount must be positive");
-      if (own && fee !== null && value + fee > own.stable) throw new Error(`Not enough dollars: balance ${usd(own.stable)}, fee ≈ ${usd(fee)}`);
+      if (own && fee !== null && value + fee > own.stable) throw new Error(`Not enough dollars: balance ${usd(own.stable)}, fee ≈ ${usdFee(fee)}`);
       setBusy("Confirm with your fingerprint…");
       const api = await getApi();
       const r = await withUnlockedPair(vault, (pair) => transferStable(api, network, team.address, value, pair));
-      setNotice(`Sent ${usd(value)} to the team wallet (tx ${shortHash(r.txHash)}, fee ${usd(r.feePaid)} in dollars)`);
+      setNotice(`Sent ${usd(value)} to the team wallet (tx ${shortHash(r.txHash)}, fee ${usdFee(r.feePaid)} in dollars)`);
       setAmount("");
     } catch (err) {
       setError(errorText(err));
@@ -103,8 +103,8 @@ export function TeamWallet({ vault, suggested }: { vault: VaultRecord; suggested
   if (team === undefined) return null;
 
   return (
-    <div className="card">
-      <span className="label">Team wallet</span>
+    <div className="stack">
+      <p className="muted small">Move takings to a shared wallet that needs 2 of 3 people to spend.</p>
       {editing ? (
         <TeamForm
           initial={team ?? { signatories: [vault.address, "", ""], threshold: 2 }}
@@ -128,7 +128,7 @@ export function TeamWallet({ vault, suggested }: { vault: VaultRecord; suggested
             </dl>
             {teamBal && teamBal.native === 0n ? (
               <>
-                <p className="muted small">A new account needs the one-time network deposit before it can receive dollars.</p>
+                <p className="muted small">This team wallet needs a one-time setup before it can receive dollars.</p>
                 <button className="btn" onClick={() => void activate()} disabled={busy !== null}>
                   {busy ?? "Activate team wallet"}
                 </button>
@@ -139,7 +139,7 @@ export function TeamWallet({ vault, suggested }: { vault: VaultRecord; suggested
                   Send to team wallet (dollars)
                 </label>
                 <input id="payout-amount" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={busy !== null} />
-                <span className="muted small">Network fee ≈ {fee === null ? "…" : usd(fee)}, paid in dollars</span>
+                <span className="muted small">Network fee ≈ {fee === null ? "…" : usdFee(fee)}, paid in dollars</span>
                 <button type="submit" className="btn primary" disabled={busy !== null || !amount.trim()}>
                   {busy ?? "Send with fingerprint"}
                 </button>

@@ -1,16 +1,19 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { decodeAddress, encodeAddress } from "@polkadot/util-crypto";
+import Link from "next/link";
+import { decodeAddress, encodeAddress, mnemonicGenerate } from "@polkadot/util-crypto";
 import { chainNow, encodeInvoice, newInvoiceId, parseAmount, watchInvoice, type Invoice, type PaidEvent } from "@stabletap/engine";
 import { Qr } from "@/components/Qr";
 import { getApi } from "@/lib/chain";
-import { errorText, shortHash, usd } from "@/lib/format";
+import { errorText, usd } from "@/lib/format";
 import { network, options } from "@/lib/network";
 import {
   clearCharge, createTerminal, forgetTerminal, loadTerminal, nfcWriteSupported, publishCharge, tapUrl, terminalEnabled, writeTag, type TerminalCreds,
 } from "@/lib/terminal";
-import { loadVault } from "@/lib/vault";
+import { pairFrom } from "@/lib/keys";
+import { createVault, loadVault, passkeyPrfSupported, type VaultRecord } from "@/lib/vault";
+import { TeamWallet } from "../dashboard/TeamWallet";
 
 interface Shop {
   name: string;
@@ -18,6 +21,8 @@ interface Shop {
 }
 
 const SHOP_KEY = "stabletap.pos.shop.v1";
+/** Address of the shop wallet once it is open on chain. */
+const ACTIVATED_KEY = "stabletap.pos.activated.v1";
 // The POS keypad charges in cents; the asset may have more decimals.
 const KEYPAD_DECIMALS = 2;
 const MAX_DIGITS = 7;
@@ -92,16 +97,19 @@ export function Pos() {
 
   return (
     <section className="stack" aria-live="polite">
-      <div className="row">
-        <h1>{shop?.name ?? "Merchant POS"}</h1>
-        <span className="row small">
-          {shop && view?.name === "keypad" && (
-            <button className="btn" onClick={() => setView({ name: "setup" })}>
-              Settings
+      {shop && (
+        <div className="row">
+          <h1>{shop.name}</h1>
+          {view?.name === "keypad" && (
+            <button className="icon-btn" onClick={() => setView({ name: "setup" })} aria-label="Settings" title="Settings">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
             </button>
           )}
-        </span>
-      </div>
+        </div>
+      )}
       {error && (
         <p className="alert" role="alert">
           {error}
@@ -120,17 +128,20 @@ export function Pos() {
             }}
           />
           {shop && terminalEnabled() && <TapSetup merchant={shop.payout} terminal={terminal} onChange={setTerminal} />}
+          {shop && <MoreSettings payout={shop.payout} />}
+          {shop && (
+            <button className="btn" onClick={() => setView({ name: "keypad" })}>
+              Back to the till
+            </button>
+          )}
         </>
       )}
 
       {view?.name === "keypad" && (
         <>
-          <div className="card">
-            <span className="label">Ready to charge</span>
-            <span className="big" aria-label={`Amount ${amountText} dollars`}>
-              ${amountText}
-            </span>
-          </div>
+          <p className={`till-amount${canCharge ? "" : " empty"}`} aria-live="polite" aria-label={`Amount ${amountText} dollars`}>
+            ${amountText}
+          </p>
           <div className="keypad">
             {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((d) => (
               <button key={d} className="btn" onClick={() => setDigits((v) => (v.length < MAX_DIGITS ? v + d : v))}>
@@ -170,7 +181,6 @@ export function Pos() {
           <div className="card" role="status">
             <span className="label">Expired, not paid</span>
             <span className="big">{usd(view.invoice.amount)}</span>
-            <span className="mono small">{view.invoice.id}</span>
           </div>
           <button className="btn primary" onClick={() => setView({ name: "keypad" })}>
             Back to keypad
@@ -183,20 +193,6 @@ export function Pos() {
           <div className="paid" role="status">
             <span className="label">Paid</span>
             <div className="big">{usd(view.invoice.amount)}</div>
-          </div>
-          <div className="card">
-            <dl className="kv">
-              <dt>Invoice</dt>
-              <dd className="mono small">{view.invoice.id}</dd>
-              <dt>Block</dt>
-              <dd>#{view.paid.blockNumber} (final)</dd>
-              <dt>From</dt>
-              <dd className="mono small">{shortHash(view.paid.payer)}</dd>
-            </dl>
-            <span className="label">Transaction</span>
-            <span className="mono small" title={view.paid.txHash}>
-              {shortHash(view.paid.txHash)}
-            </span>
           </div>
           <button
             className="btn primary"
@@ -293,14 +289,13 @@ function Charging({
   const expired = left !== null && left <= 0;
   return (
     <div className="card">
-      <span className="label">{tap === "on" ? "Tap or scan" : "Scan"} to pay {invoice.merchant}</span>
+      <span className="label">{tap === "on" ? "Tap or scan to pay" : "Scan to pay"}</span>
       <span className="big">{usd(invoice.amount)}</span>
-      {tap === "on" && !expired && <span className="small">Tag at the counter is live for this sale</span>}
+      {tap === "on" && !expired && <span className="small">Or tap the sticker at the counter</span>}
       {!expired && <Qr value={link} label={`Payment QR code for ${usd(invoice.amount)}`} />}
       <p className="muted" aria-busy={!watching}>
         {!watching ? "Connecting…" : expired ? "Expired. Checking for a payment already sent…" : `Waiting for payment… expires in ${fmtLeft(left)}`}
       </p>
-      <span className="mono small">{invoice.id}</span>
       <button className="btn" onClick={() => navigator.clipboard.writeText(link)}>
         Copy payment link
       </button>
@@ -313,56 +308,131 @@ function Charging({
 
 function ShopSettings({ initial, onSave }: { initial: Shop | null; onSave: (s: Shop) => void }) {
   const [name, setName] = useState(initial?.name ?? "");
-  const [payout, setPayout] = useState(initial?.payout ?? "");
+  const [wallet, setWallet] = useState<VaultRecord | null>(null);
+  // A pasted payout address, for owners who already have a wallet elsewhere.
+  const [custom, setCustom] = useState(false);
+  const [payout, setPayout] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  function save(e: React.FormEvent) {
-    e.preventDefault();
-    const n = name.trim();
-    if (n.length < 1 || n.length > 40) return setError("Shop name must be 1-40 characters");
+  useEffect(() => {
     try {
-      onSave({ name: n, payout: encodeAddress(decodeAddress(payout.trim()), network.ss58) });
-    } catch {
-      setError("Payout address is not a valid Portaldot address");
-    }
-  }
-
-  function useThisWallet() {
-    try {
-      const v = loadVault();
-      if (!v) return setError("No wallet on this device yet. Create one in the wallet first.");
-      setPayout(v.address);
+      const w = loadVault("shop");
+      setWallet(w);
+      if (initial && initial.payout !== w?.address) {
+        setCustom(true);
+        setPayout(initial.payout);
+      }
     } catch (e) {
       setError(errorText(e));
     }
+  }, [initial]);
+  function shopName(): string | null {
+    const n = name.trim();
+    if (n.length < 1 || n.length > 40) {
+      setError("Enter a shop name (up to 40 characters)");
+      return null;
+    }
+    return n;
   }
-
+  /** Creates the shop's own passkey wallet on this device, then activates it with the faucet. */
+  async function createWallet(n: string) {
+    setBusy("Creating your shop…");
+    if (!(await passkeyPrfSupported())) throw new Error("This browser can't use fingerprint sign-in. Try Chrome on Android or Safari on iPhone.");
+    const phrase = mnemonicGenerate(12);
+    const pair = await pairFrom(phrase);
+    const w = await createVault(phrase, pair.address, "shop", n);
+    pair.lock();
+    setWallet(w);
+    // A new account must exist on chain before it can receive dollars; the test faucet opens it (no money added).
+    setBusy("Almost done…");
+    await activate(w.address);
+    onSave({ name: n, payout: w.address });
+  }
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    const n = shopName();
+    if (!n) return;
+    try {
+      if (custom) return onSave({ name: n, payout: encodeAddress(decodeAddress(payout.trim()), network.ss58) });
+      if (wallet) {
+        if (localStorage.getItem(ACTIVATED_KEY) !== wallet.address) {
+          setBusy("Almost done…");
+          await activate(wallet.address);
+        }
+        return onSave({ name: n, payout: wallet.address });
+      }
+      await createWallet(n);
+    } catch (err) {
+      setError(custom && !busy ? "That wallet address is not valid" : errorText(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+  const first = !initial;
   return (
-    <form className="card" onSubmit={save}>
-      <h2>Shop settings</h2>
-      <label className="label" htmlFor="shop-name">
-        Shop name (shown to customers)
-      </label>
-      <input id="shop-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} required />
-      <label className="label" htmlFor="payout">
-        Payout address
-      </label>
-      <input id="payout" className="mono" value={payout} onChange={(e) => setPayout(e.target.value)} autoComplete="off" spellCheck={false} required />
-      <button type="button" className="btn" onClick={useThisWallet}>
-        Use this device&apos;s wallet address
-      </button>
+    <form className="card" onSubmit={(e) => void save(e)}>
+      <h2>{first ? "Name your shop" : "Shop settings"}</h2>
+      {!first && (
+        <label className="field-label" htmlFor="shop-name">
+          Shop name
+        </label>
+      )}
+      <input
+        id="shop-name"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        maxLength={40}
+        placeholder="Corner Coffee"
+        aria-label="Shop name"
+        autoComplete="organization"
+        required
+      />
+      {first && <p className="muted small">Customers see this name when they pay.</p>}
+      {custom && (
+        <>
+          <label className="label" htmlFor="payout">
+            Wallet address for your money
+          </label>
+          <input id="payout" className="mono" value={payout} onChange={(e) => setPayout(e.target.value)} placeholder="Paste a wallet address" autoComplete="off" spellCheck={false} required />
+        </>
+      )}
       {error && (
         <p className="alert" role="alert">
           {error}
         </p>
       )}
-      <button type="submit" className="btn primary">
-        Save
+      <button type="submit" className="btn primary" disabled={busy !== null}>
+        {busy ?? (custom || wallet ? "Save" : "Create my shop")}
       </button>
+      {first && !busy && <p className="muted small center">Secured with your fingerprint.</p>}
+      {/* Sending sales to an existing wallet is an advanced option, offered only after setup. */}
+      {!first && (
+        <button type="button" className="link-btn" onClick={() => setCustom((c) => !c)} disabled={busy !== null}>
+          {custom ? (wallet ? "Use my shop wallet instead" : "Create a shop wallet instead") : "Send sales to another wallet"}
+        </button>
+      )}
     </form>
   );
 }
-
+/** Opens the brand-new shop account on the test network (existential deposit only, so it starts at $0). */
+async function activate(address: string) {
+  let res: Response;
+  try {
+    res = await fetch("/api/faucet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ address, open: true }),
+      // Never leave the owner on a spinner if the test network hangs.
+      signal: AbortSignal.timeout(90_000),
+    });
+  } catch {
+    throw new Error("Your shop was created but the test network didn't answer in time. Tap the button again.");
+  }
+  if (res.ok || res.status === 409) return localStorage.setItem(ACTIVATED_KEY, address);
+  const body = (await res.json().catch(() => ({}))) as { error?: string };
+  throw new Error(`Your shop was created but couldn't be switched on yet (${body.error ?? res.status}). Tap the button again in a minute.`);
+}
 /** One-time setup of the counter tag: register this POS as a terminal, then write its URL to an NFC sticker. */
 function TapSetup({ merchant, terminal, onChange }: { merchant: string; terminal: TerminalCreds | null; onChange: (t: TerminalCreds | null) => void }) {
   const [busy, setBusy] = useState(false);
@@ -402,27 +472,23 @@ function TapSetup({ merchant, terminal, onChange }: { merchant: string; terminal
   return (
     <div className="card">
       <h2>Tap to pay</h2>
-      <p className="muted small">
-        A sticker at the counter opens the current sale on the customer&apos;s phone. Any NFC phone opens it without an app. The same link works as a printed QR.
-      </p>
+      <p className="muted small">Customers tap a sticker at your counter to pay. A printed QR code works too.</p>
       {!url ? (
         <button className="btn" onClick={() => void setup()} disabled={busy}>
           {busy ? "Setting up…" : "Set up tap to pay"}
         </button>
       ) : (
         <>
-          <span className="label">Counter tag link</span>
-          <span className="mono small">{url}</span>
           {nfcWriteSupported() ? (
             <button className="btn" onClick={() => void write(url)}>
-              Write NFC tag
+              Write the sticker
             </button>
           ) : (
-            <p className="muted small">To write the sticker, open this page in Chrome on Android, or write the link with any NFC app.</p>
+            <p className="muted small">To write the sticker, open this page in Chrome on Android, or use any NFC app.</p>
           )}
           <Qr value={url} label="Counter QR code for tap to pay" />
           <button className="btn" onClick={() => navigator.clipboard.writeText(url)}>
-            Copy tag link
+            Copy sticker link
           </button>
           <button
             className="btn"
@@ -431,7 +497,7 @@ function TapSetup({ merchant, terminal, onChange }: { merchant: string; terminal
               onChange(null);
             }}
           >
-            Forget this terminal
+            Remove tap to pay
           </button>
         </>
       )}
@@ -448,4 +514,42 @@ function TapSetup({ merchant, terminal, onChange }: { merchant: string; terminal
 function fmtLeft(sec: number | null): string {
   if (sec === null || !Number.isFinite(sec)) return "…";
   return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+}
+
+/** Less common shop tools, kept off the till: the team payout wallet and developer tools. */
+function MoreSettings({ payout }: { payout: string }) {
+  const [vault, setVault] = useState<VaultRecord | null>(null);
+  useEffect(() => {
+    try {
+      const v = loadVault("shop");
+      // Team payouts sign with the shop wallet, so they only apply when sales go to it.
+      setVault(v && v.address === payout ? v : null);
+    } catch {
+      setVault(null);
+    }
+  }, [payout]);
+  return (
+    <>
+      {vault && (
+        <details className="card">
+          <summary>Team wallet</summary>
+          <TeamWallet vault={vault} suggested={0n} />
+        </details>
+      )}
+      <Link className="card setting-link" href="/wallet">
+        <span>
+          <strong>Personal wallet</strong>
+          <span className="muted small">Pay at other shops with your own money</span>
+        </span>
+        <span aria-hidden="true">›</span>
+      </Link>
+      <Link className="card setting-link" href="/developers">
+        <span>
+          <strong>For developers</strong>
+          <span className="muted small">Pay button for your website, payment notifications</span>
+        </span>
+        <span aria-hidden="true">›</span>
+      </Link>
+    </>
+  );
 }

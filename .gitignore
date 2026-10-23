@@ -35,3 +35,7 @@ apps/indexer/data/
 *.db-wal
 # vercel cli project link
 .vercel/
+
+# local secret files
+*.secret
+*.pem

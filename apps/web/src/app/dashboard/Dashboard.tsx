@@ -2,34 +2,52 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { u8aToHex, stringToU8a } from "@polkadot/util";
-import { buildRefundCall, quoteCallFee, refund, webhookRegistrationMessage } from "@stabletap/engine";
+import { buildRefundCall, quoteCallFee, refund } from "@stabletap/engine";
+import { parseAmount } from "@stabletap/engine/config";
 import { getApi } from "@/lib/chain";
-import { errorText, shortHash, usd } from "@/lib/format";
-import {
-  deleteWebhook, fetchMerchantRecords, fetchWebhook, indexerEnabled, merchantAmount, putWebhook, type IndexedRecord, type WebhookStatus,
-} from "@/lib/indexer";
+import { clockText, dayText, errorText, usd, usdFee, whenText } from "@/lib/format";
+import { fetchMerchantRecords, historyInSync, indexerEnabled, merchantAmount, type IndexedRecord } from "@/lib/indexer";
 import { withUnlockedPair } from "@/lib/keys";
-import { explorerLink, network } from "@/lib/network";
+import { linkIdOf, linkItems } from "@/lib/links";
+import { network } from "@/lib/network";
 import { useBalances } from "@/lib/useBalances";
 import { loadVault, type VaultRecord } from "@/lib/vault";
-import { TeamWallet } from "./TeamWallet";
 
 const REFRESH_MS = 6_000;
+/** History a few blocks behind is normal right after a payment; only warn when it stays behind this long. */
+const STALE_WARN_MS = 60_000;
 
-type RefundView = { rec: IndexedRecord; max: bigint; amount: string; fee: bigint | null; stage: string | null };
+/** A sale (payment) with the refunds made against it. Refunds never get their own row. */
+interface Sale {
+  payment: IndexedRecord;
+  /** What the customer paid. */
+  amount: bigint;
+  /** What reached the shop after the StableTap service fee. */
+  received: bigint;
+  /** Item name for payment-link sales; null for counter sales. */
+  item: string | null;
+  refunds: IndexedRecord[];
+  refunded: bigint;
+}
+
+type Screen = { name: "list" } | { name: "detail"; txHash: string } | { name: "refund"; txHash: string };
 
 export function Dashboard() {
   const [vault, setVault] = useState<VaultRecord | null | undefined>(undefined);
   const [records, setRecords] = useState<IndexedRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [refunding, setRefunding] = useState<RefundView | null>(null);
+  const [screen, setScreen] = useState<Screen>({ name: "list" });
+  // When the history first fell behind (or failed); null while it is in sync.
+  const [behindSince, setBehindSince] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  // Refunds this phone just sent, shown right away until the history lists them.
+  const [sent, setSent] = useState<IndexedRecord[]>([]);
   const { balances } = useBalances(vault?.address ?? null);
 
   useEffect(() => {
     try {
-      setVault(loadVault());
+      setVault(loadVault("shop"));
     } catch (e) {
       setError(errorText(e));
       setVault(null);
@@ -37,11 +55,11 @@ export function Dashboard() {
   }, []);
 
   const load = useCallback(async (merchant: string) => {
-    try {
-      setRecords(await fetchMerchantRecords(merchant));
-    } catch (e) {
-      setError(`Could not load history: ${errorText(e)}`);
-    }
+    const [recs, sync] = await Promise.allSettled([fetchMerchantRecords(merchant), historyInSync()]);
+    if (recs.status === "fulfilled") setRecords(recs.value);
+    const ok = recs.status === "fulfilled" && sync.status === "fulfilled" && sync.value;
+    setBehindSince((since) => (ok ? null : (since ?? Date.now())));
+    setNow(Date.now());
   }, []);
 
   useEffect(() => {
@@ -51,59 +69,38 @@ export function Dashboard() {
     return () => clearInterval(t);
   }, [vault, load]);
 
-  async function startRefund(rec: IndexedRecord) {
-    if (!vault) return;
-    const max = merchantAmount(rec, vault.address) - (rec.refunded ?? 0n);
-    setError(null);
-    setNotice(null);
-    const view: RefundView = { rec, max, amount: usd(max).slice(1), fee: null, stage: null };
-    setRefunding(view);
-    try {
-      const api = await getApi();
-      const fee = await quoteCallFee(api, network, buildRefundCall(api, network, { to: rec.signer, amount: max, invoiceId: rec.invoiceId }), vault.address);
-      setRefunding((v) => (v && v.rec.txHash === rec.txHash ? { ...v, fee } : v));
-    } catch (e) {
-      setError(`Could not estimate the refund fee: ${errorText(e)}`);
-    }
-  }
-
-  async function confirmRefund(v: RefundView) {
-    if (!vault) return;
-    setError(null);
-    try {
-      const { parseAmount } = await import("@stabletap/engine/config");
-      const amount = parseAmount(v.amount, network.decimals);
-      if (amount <= 0n || amount > v.max) throw new Error(`Refund must be between ${usd(1n)} and ${usd(v.max)}`);
-      setRefunding({ ...v, stage: "Confirm with your fingerprint…" });
-      const api = await getApi();
-      const r = await withUnlockedPair(vault, (pair) =>
-        refund(api, network, { to: v.rec.signer, amount, invoiceId: v.rec.invoiceId }, pair, (stage) =>
-          setRefunding({ ...v, stage: stage === "signed" ? "Sending…" : "In a block, waiting for finality…" }),
-        ),
-      );
-      setRefunding(null);
-      setNotice(`Refunded ${usd(amount)} for ${v.rec.invoiceId} (tx ${shortHash(r.txHash)}, fee ${usd(r.feePaid)} in dollars)`);
-      await load(vault.address);
-    } catch (e) {
-      setError(errorText(e));
-      setRefunding({ ...v, stage: null });
-    }
-  }
-
   if (vault === undefined) return <p className="muted">Loading…</p>;
 
+  if (!vault) {
+    return (
+      <section className="stack">
+        <h1 className="sr-only">Sales</h1>
+        <div className="card">
+          <h2>No shop on this phone yet</h2>
+          <p className="muted">Set up your shop first. Your sales show up here.</p>
+          <Link className="btn primary" href="/pos">
+            Set up my shop
+          </Link>
+        </div>
+      </section>
+    );
+  }
+
+  const known = new Set((records ?? []).map((r) => r.txHash));
+  const all = [...(records ?? []), ...sent.filter((r) => !known.has(r.txHash))];
+  const sales = toSales(all, vault.address, linkItems(vault.address));
   const startOfDay = new Date().setHours(0, 0, 0, 0);
-  const today = records?.filter((r) => r.timestamp >= startOfDay) ?? [];
-  const takings = today.reduce((s, r) => s + (r.kind === "payment" ? merchantAmount(r, vault?.address ?? "") : -merchantAmount(r, vault?.address ?? "")), 0n);
+  const todays = sales.filter((s) => s.payment.timestamp >= startOfDay);
+  const todayRefunds = all.filter((r) => r.kind === "refund" && r.timestamp >= startOfDay);
+  const days = groupByDay(sales);
+  // What the shop keeps today: received after the service fee, minus refunds it sent.
+  const takings = todays.reduce((s, x) => s + x.received, 0n) - todayRefunds.reduce((s, r) => s + merchantAmount(r, vault.address), 0n);
+  const stale = !indexerEnabled() || (behindSince !== null && now - behindSince > STALE_WARN_MS);
+  const selected = screen.name !== "list" ? sales.find((s) => s.payment.txHash === screen.txHash) : undefined;
 
   return (
-    <section className="stack wide" aria-live="polite">
-      <div className="row">
-        <h1>Dashboard</h1>
-        <span className="row small">
-          <Link href="/pos">POS</Link>
-        </span>
-      </div>
+    <section className="stack" aria-live="polite">
+      <h1 className="sr-only">Sales</h1>
       {error && (
         <p className="alert" role="alert">
           {error}
@@ -115,227 +112,339 @@ export function Dashboard() {
         </p>
       )}
 
-      {!vault && (
+      {screen.name === "list" && (
+        <>
+          <div className="card">
+            <span className="muted">Today</span>
+            <span className="big">{records ? usd(takings < 0n ? 0n : takings) : "…"}</span>
+            <span className="muted small">
+              {records ? plural(todays.length, "sale") : ""}
+              {balances ? ` · Balance ${usd(balances.stable)}` : ""}
+            </span>
+          </div>
+
+          {stale && (
+            <p className="notice" role="status">
+              Sales are updating. New payments can take a minute to show here. Your money is safe in your balance.
+            </p>
+          )}
+
+          <div className="card">
+            <h2 className="card-title">Payments</h2>
+            {records === null && <p className="muted">Loading…</p>}
+            {records !== null && sales.length === 0 && <p className="muted">No payments yet. Start a sale in your shop.</p>}
+            {days.map(([day, list]) => (
+              <div key={day} className="day-group">
+                <h3 className="day-head">{day}</h3>
+            <ul className="sales">
+              {list.map((s) => (
+                <li key={s.payment.txHash}>
+                  <button
+                    type="button"
+                    className="sale-row"
+                    onClick={() => {
+                      setNotice(null);
+                      setError(null);
+                      setScreen({ name: "detail", txHash: s.payment.txHash });
+                    }}
+                  >
+                    <span className="sale-main">
+                      <strong>{usd(s.amount)}</strong>
+                      <span className="muted small">
+                        {s.item ? `${s.item} · ` : ""}
+                        {clockText(s.payment.timestamp)}
+                      </span>
+                    </span>
+                    {s.refunded > 0n && <span className="chip">{s.refunded >= s.amount ? "Refunded" : `Refunded ${usd(s.refunded)}`}</span>}
+                    <span className="chevron" aria-hidden="true">
+                      ›
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {screen.name !== "list" && !selected && (
         <div className="card">
-          <p>The dashboard uses this device&apos;s wallet as the shop&apos;s payout account, so it can sign refunds.</p>
-          <Link className="btn primary" href="/wallet">
-            Create a wallet first
-          </Link>
+          <p className="muted">Loading…</p>
+          <BackButton onClick={() => setScreen({ name: "list" })} />
         </div>
       )}
 
-      {vault && (
-        <>
-          <div className="card">
-            <span className="label">Payout account</span>
-            <span className="mono small">{vault.address}</span>
-            <dl className="kv">
-              <dt>Balance</dt>
-              <dd>{balances ? usd(balances.stable) : "…"}</dd>
-              <dt>Today, net of refunds</dt>
-              <dd>{records ? usd(takings < 0n ? 0n : takings) : "…"}</dd>
-              <dt>Sales today</dt>
-              <dd>{records ? today.filter((r) => r.kind === "payment").length : "…"}</dd>
-            </dl>
-          </div>
+      {screen.name === "detail" && selected && (
+        <SaleDetail sale={selected} onBack={() => setScreen({ name: "list" })} onRefund={() => setScreen({ name: "refund", txHash: selected.payment.txHash })} />
+      )}
 
-          {!indexerEnabled() && <p className="alert">History is not configured on this deployment (NEXT_PUBLIC_STABLETAP_INDEXER).</p>}
-
-          {refunding && (
-            <form
-              className="card"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void confirmRefund(refunding);
-              }}
-            >
-              <h2>Refund {refunding.rec.invoiceId}</h2>
-              <label className="label" htmlFor="refund-amount">
-                Amount in dollars (max {usd(refunding.max)})
-              </label>
-              <input
-                id="refund-amount"
-                inputMode="decimal"
-                value={refunding.amount}
-                onChange={(e) => setRefunding({ ...refunding, amount: e.target.value })}
-                disabled={refunding.stage !== null}
-              />
-              <dl className="kv">
-                <dt>To customer</dt>
-                <dd className="mono small">{shortHash(refunding.rec.signer)}</dd>
-                <dt>Network fee</dt>
-                <dd>{refunding.fee === null ? "estimating…" : `≈ ${usd(refunding.fee)} (in dollars)`}</dd>
-              </dl>
-              {refunding.stage && <p aria-busy="true">{refunding.stage}</p>}
-              <button type="submit" className="btn primary" disabled={refunding.stage !== null || refunding.fee === null}>
-                Refund with fingerprint
-              </button>
-              <button type="button" className="btn" onClick={() => setRefunding(null)} disabled={refunding.stage !== null}>
-                Cancel
-              </button>
-            </form>
-          )}
-
-          {indexerEnabled() && (
-            <div className="card">
-              <span className="label">Invoices</span>
-              {records === null && <p className="muted">Loading…</p>}
-              {records?.length === 0 && <p className="muted">No payments yet. Charge something on the POS.</p>}
-              <ul className="list">
-                {records?.map((r) => (
-                  <RecordRow key={r.txHash} rec={r} merchant={vault.address} onRefund={() => void startRefund(r)} busy={refunding !== null} />
-                ))}
-              </ul>
-            </div>
-          )}
-
-          <TeamWallet vault={vault} suggested={takings > 0n ? takings : 0n} />
-
-          {indexerEnabled() && <WebhookCard vault={vault} />}
-        </>
+      {screen.name === "refund" && selected && (
+        <RefundForm
+          sale={selected}
+          vault={vault}
+          balance={balances?.stable ?? null}
+          onCancel={() => setScreen({ name: "detail", txHash: selected.payment.txHash })}
+          onDone={async (amount, txHash) => {
+            setSent((list) => [
+              ...list,
+              {
+                kind: "refund",
+                invoiceId: selected.payment.invoiceId,
+                txHash,
+                blockNumber: 0,
+                extrinsicIndex: 0,
+                signer: vault.address,
+                timestamp: Date.now(),
+                transfers: [{ from: vault.address, to: selected.payment.signer, amount }],
+                fee: null,
+              },
+            ]);
+            setNotice(`Refunded ${usd(amount)}. The customer gets it in a few seconds.`);
+            setScreen({ name: "detail", txHash: selected.payment.txHash });
+            await load(vault.address);
+          }}
+        />
       )}
     </section>
   );
 }
 
-function RecordRow({ rec, merchant, onRefund, busy }: { rec: IndexedRecord; merchant: string; onRefund: () => void; busy: boolean }) {
-  const amount = merchantAmount(rec, merchant);
-  const refundable = rec.kind === "payment" ? amount - (rec.refunded ?? 0n) : 0n;
-  const link = explorerLink(rec.blockNumber, rec.extrinsicIndex);
-  const platform = rec.kind === "payment" ? rec.transfers.filter((t) => t.to !== merchant).reduce((s, t) => s + t.amount, 0n) : 0n;
+function SaleDetail({ sale, onBack, onRefund }: { sale: Sale; onBack: () => void; onRefund: () => void }) {
+  const p = sale.payment;
+  const refundable = sale.amount - sale.refunded;
+  const [copied, setCopied] = useState(false);
   return (
-    <li className="list-item">
-      <div className="row">
-        <strong>
-          {rec.kind === "refund" ? "Refund " : ""}
-          {rec.kind === "refund" ? `−${usd(amount)}` : usd(amount)}
-        </strong>
-        <span className="muted small">{new Date(rec.timestamp).toLocaleString()}</span>
+    <div className="card">
+      <BackButton onClick={onBack} />
+      <div className="detail-head">
+        <span className="big">{usd(sale.amount)}</span>
+        <span className={`chip ${sale.refunded >= sale.amount ? "" : "ok"}`}>
+          {sale.refunded === 0n ? "Paid" : sale.refunded >= sale.amount ? "Refunded" : "Partly refunded"}
+        </span>
       </div>
-      <div className="row small">
-        <span className="mono">{rec.invoiceId}</span>
-        {link ? (
-          <a className="mono" href={link} target="_blank" rel="noreferrer">
-            {shortHash(rec.txHash)}
-          </a>
-        ) : (
-          <span className="mono">{shortHash(rec.txHash)}</span>
+      <dl className="kv">
+        {sale.item && (
+          <>
+            <dt>Item</dt>
+            <dd>{sale.item} (payment link)</dd>
+          </>
         )}
-      </div>
-      {rec.kind === "payment" && (
-        <div className="row small muted">
-          <span>
-            {platform > 0n ? `Platform share ${usd(platform)} · ` : ""}
-            {rec.fee?.assetId === network.assetId ? `Fee ${usd(rec.fee.amount)} in dollars` : rec.fee ? `Paid with asset ${rec.fee.assetId ?? "native"}` : "Fee ?"}
-          </span>
-          {(rec.refunded ?? 0n) > 0n && <span>Refunded {usd(rec.refunded!)}</span>}
-        </div>
-      )}
-      {rec.kind === "payment" && refundable > 0n && (
-        <button className="btn" onClick={onRefund} disabled={busy}>
+        <dt>Date</dt>
+        <dd>{whenText(p.timestamp)}</dd>
+        {sale.received < sale.amount && (
+          <>
+            <dt>StableTap fee</dt>
+            <dd>−{usd(sale.amount - sale.received)}</dd>
+            <dt>You received</dt>
+            <dd>{usd(sale.received)}</dd>
+          </>
+        )}
+        {sale.refunds.map((r) => (
+          <RefundLine key={r.txHash} rec={r} />
+        ))}
+      </dl>
+      <details>
+        <summary>More details</summary>
+        <dl className="kv small">
+          <dt>Order</dt>
+          <dd className="mono">{p.invoiceId}</dd>
+        </dl>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => {
+            void navigator.clipboard.writeText(p.txHash).then(() => setCopied(true));
+          }}
+        >
+          {copied ? "Copied" : "Copy transaction ID"}
+        </button>
+      </details>
+      {refundable > 0n && (
+        <button type="button" className="btn primary" onClick={onRefund}>
           Refund
         </button>
       )}
-    </li>
+    </div>
   );
 }
 
-function WebhookCard({ vault }: { vault: VaultRecord }) {
-  const [status, setStatus] = useState<WebhookStatus | null>(null);
-  const [url, setUrl] = useState("");
-  const [secret, setSecret] = useState<string | null>(null);
+function RefundLine({ rec }: { rec: IndexedRecord }) {
+  const amount = rec.transfers.reduce((s, t) => s + t.amount, 0n);
+  return (
+    <>
+      <dt>Refund</dt>
+      <dd>
+        −{usd(amount)} · {whenText(rec.timestamp)}
+      </dd>
+    </>
+  );
+}
+
+function RefundForm({
+  sale,
+  vault,
+  balance,
+  onCancel,
+  onDone,
+}: {
+  sale: Sale;
+  vault: VaultRecord;
+  balance: bigint | null;
+  onCancel: () => void;
+  onDone: (amount: bigint, txHash: string) => Promise<void>;
+}) {
+  const max = sale.amount - sale.refunded;
+  const [mode, setMode] = useState<"full" | "other">("full");
+  const [other, setOther] = useState("");
+  const [fee, setFee] = useState<bigint | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
 
-  const refresh = useCallback(() => {
-    fetchWebhook(vault.address).then(setStatus, (e: unknown) => setError(errorText(e)));
-  }, [vault.address]);
-  useEffect(refresh, [refresh]);
+  useEffect(() => {
+    let live = true;
+    getApi()
+      // The fee doesn't depend on the amount; quote a tiny one so a low balance can't make the estimate fail.
+      .then((api) => quoteCallFee(api, network, buildRefundCall(api, network, { to: sale.payment.signer, amount: 1n, invoiceId: sale.payment.invoiceId }), vault.address))
+      .then((f) => live && setFee(f))
+      .catch(() => live && setFee(null));
+    return () => {
+      live = false;
+    };
+  }, [sale.payment, vault.address]);
 
-  /** The merchant proves control of the payout address by signing the exact registration. */
-  async function signed(target: string) {
-    const signedAt = Math.floor(Date.now() / 1000);
-    const signature = await withUnlockedPair(vault, async (pair) => u8aToHex(pair.sign(stringToU8a(webhookRegistrationMessage(vault.address, target, signedAt)))));
-    return { signedAt, signature };
+  function amount(): bigint {
+    if (mode === "full") return max;
+    const text = other.trim().replace(/^\$/, "");
+    if (!/^\d+(\.\d{1,2})?$/.test(text)) throw new Error("Enter an amount like 2.50");
+    const v = parseAmount(text, network.decimals);
+    if (v <= 0n || v > max) throw new Error(`Enter an amount up to ${usd(max)}`);
+    return v;
   }
 
-  async function save(e: React.FormEvent) {
+  function checkBalance(value: bigint) {
+    if (balance !== null && fee !== null && value + fee > balance)
+      throw new Error(`Your balance (${usd(balance)}) can't cover this refund plus the ${usdFee(fee)} fee. Refund up to ${usd(balance > fee ? balance - fee : 0n)}.`);
+  }
+
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setBusy(true);
     setError(null);
+    let value: bigint;
     try {
-      const target = new URL(url.trim()).toString();
-      const res = await putWebhook(vault.address, { url: target, ...(await signed(target)) });
-      setSecret(res.secret);
-      setUrl("");
-      refresh();
+      value = amount();
+      checkBalance(value);
+    } catch (err) {
+      return setError(errorText(err));
+    }
+    try {
+      setBusy("Confirm with your fingerprint…");
+      const api = await getApi();
+      const receipt = await withUnlockedPair(vault, (pair) => {
+        setBusy("Refunding…");
+        return refund(api, network, { to: sale.payment.signer, amount: value, invoiceId: sale.payment.invoiceId }, pair);
+      });
+      await onDone(value, receipt.txHash);
     } catch (err) {
       setError(errorText(err));
-    } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
 
-  async function remove() {
-    setBusy(true);
-    setError(null);
-    try {
-      await deleteWebhook(vault.address, await signed(""));
-      setSecret(null);
-      refresh();
-    } catch (err) {
-      setError(errorText(err));
-    } finally {
-      setBusy(false);
-    }
+  let label = "Refund";
+  try {
+    label = `Refund ${usd(amount())}`;
+  } catch {
+    // Invalid "other" amount: keep the plain label until it parses.
   }
 
   return (
-    <form className="card" onSubmit={save}>
-      <span className="label">Webhook</span>
-      <p className="muted small">
-        Your server gets a signed POST (Standard Webhooks: webhook-id, webhook-timestamp, webhook-signature) for every payment and refund, once final.
-      </p>
-      {status?.configured && <p className="small">Sending to {status.host}</p>}
-      {secret && (
-        <div className="notice" role="status">
-          <p className="small">Signing secret, shown once. Store it on your server:</p>
-          <p className="mono small">{secret}</p>
-          <button type="button" className="btn" onClick={() => navigator.clipboard.writeText(secret)}>
-            Copy secret
-          </button>
-        </div>
-      )}
-      <label className="label" htmlFor="hook-url">
-        {status?.configured ? "Replace URL (issues a new secret)" : "HTTPS endpoint"}
-      </label>
-      <input id="hook-url" type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://shop.example/stabletap" autoComplete="off" />
-      <button type="submit" className="btn primary" disabled={busy || !url.trim()}>
-        {busy ? "Signing…" : "Save with fingerprint"}
-      </button>
-      {status?.configured && (
-        <button type="button" className="btn" onClick={() => void remove()} disabled={busy}>
-          Remove webhook
-        </button>
-      )}
-      {status && status.deliveries.length > 0 && (
-        <ul className="list small">
-          {status.deliveries.slice(0, 5).map((d) => (
-            <li key={d.id} className="row">
-              <span className="mono">{d.id.slice(0, 14)}…</span>
-              <span>
-                {d.status}
-                {d.status !== "delivered" && d.lastError ? ` (${d.lastError}, ${d.attempts} tries)` : ""}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
+    <form className="card" onSubmit={(e) => void submit(e)}>
+      <h2>Refund</h2>
+      <fieldset className="choices" disabled={busy !== null}>
+        <legend className="sr-only">Refund amount</legend>
+        <label className="choice">
+          <input type="radio" name="refund" checked={mode === "full"} onChange={() => setMode("full")} />
+          <span>Full refund</span>
+          <strong>{usd(max)}</strong>
+        </label>
+        <label className="choice">
+          <input type="radio" name="refund" checked={mode === "other"} onChange={() => setMode("other")} />
+          <span>Other amount</span>
+        </label>
+        {mode === "other" && (
+          <div className="money-input">
+            <span aria-hidden="true">$</span>
+            <input inputMode="decimal" placeholder="0.00" value={other} onChange={(e) => setOther(e.target.value)} aria-label="Refund amount in dollars" autoFocus />
+          </div>
+        )}
+      </fieldset>
+      <p className="muted small">Goes back to the customer who paid.{fee !== null && ` Network fee ${usdFee(fee)}, paid by you.`}</p>
       {error && (
         <p className="alert" role="alert">
           {error}
         </p>
       )}
+      <button type="submit" className="btn primary" disabled={busy !== null}>
+        {busy ? (
+          <>
+            <span className="spinner" aria-hidden="true" />
+            {busy}
+          </>
+        ) : (
+          label
+        )}
+      </button>
+      <button type="button" className="btn" onClick={onCancel} disabled={busy !== null}>
+        Cancel
+      </button>
     </form>
   );
+}
+
+function BackButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button type="button" className="link-btn back-btn" onClick={onClick}>
+      ‹ All payments
+    </button>
+  );
+}
+
+/** One row per payment, newest first; refunds are folded into the payment they belong to. */
+function toSales(records: IndexedRecord[], merchant: string, items: Map<string, string>): Sale[] {
+  const refundsByInvoice = new Map<string, IndexedRecord[]>();
+  for (const r of records) if (r.kind === "refund") refundsByInvoice.set(r.invoiceId, [...(refundsByInvoice.get(r.invoiceId) ?? []), r]);
+  return records
+    .filter((r) => r.kind === "payment")
+    .map((payment) => {
+      const refunds = refundsByInvoice.get(payment.invoiceId) ?? [];
+      const listed = refunds.reduce((s, r) => s + merchantAmount(r, merchant), 0n);
+      // The indexer's total also covers refunds older than the page we fetched.
+      const refunded = payment.refunded !== undefined && payment.refunded > listed ? payment.refunded : listed;
+      const linkId = linkIdOf(payment.invoiceId);
+      // Customers get refunds up to what they paid; like card processors, the service fee isn't returned.
+      const amount = payment.transfers.reduce((s, t) => s + t.amount, 0n);
+      return {
+        payment,
+        amount,
+        received: merchantAmount(payment, merchant),
+        item: linkId ? (items.get(linkId) ?? "Payment link") : null,
+        refunds,
+        refunded,
+      };
+    })
+    .sort((a, b) => b.payment.timestamp - a.payment.timestamp);
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** Sales under "Today", "Yesterday", "23 Oct" headers, newest day first. */
+function groupByDay(sales: Sale[]): [string, Sale[]][] {
+  const groups = new Map<string, Sale[]>();
+  for (const s of sales) {
+    const day = dayText(s.payment.timestamp);
+    groups.set(day, [...(groups.get(day) ?? []), s]);
+  }
+  return [...groups];
 }

@@ -77,8 +77,26 @@ export async function fetchStats(): Promise<Stats> {
   };
 }
 
+/** Blocks (~6 s each) the history may trail the chain before we tell the owner it is still updating. */
+const BEHIND_BLOCKS = 5;
+
+/** True when the history is caught up with the chain, false when it is behind or reconnecting. */
+export async function historyInSync(): Promise<boolean> {
+  if (!options.indexer) return false;
+  const res = await fetch(`${options.indexer}/health`, { cache: "no-store" });
+  // /health answers 503 with the same body while the indexer is reconnecting.
+  const h = (await res.json()) as { ok: boolean; nextBlock: number; finalizedHead: number };
+  return h.ok && h.finalizedHead - h.nextBlock < BEHIND_BLOCKS;
+}
+
 export async function fetchMerchantRecords(merchant: string, limit = 50): Promise<IndexedRecord[]> {
   const r = await call<{ records: Raw<IndexedRecord>[] }>(`/v1/merchants/${encodeURIComponent(merchant)}/records?limit=${limit}`);
+  return r.records.map(record);
+}
+
+/** A customer's payments and the refunds sent back to them, newest first. */
+export async function fetchPayerRecords(payer: string, limit = 20): Promise<IndexedRecord[]> {
+  const r = await call<{ records: Raw<IndexedRecord>[] }>(`/v1/payers/${encodeURIComponent(payer)}/records?limit=${limit}`);
   return r.records.map(record);
 }
 
