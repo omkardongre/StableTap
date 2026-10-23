@@ -33,10 +33,11 @@
 | 📲 **Tap or scan to pay** | The shop's POS shows a QR, or the customer taps an NFC sticker at the counter. One signature pays the invoice. |
 | 💵 **Fee in dollars** | The fee is taken from the customer's pUSD through Portaldot's pool. The account's tPOT is never spent. |
 | 🔄 **Pay with any token** | A customer holding only PORT (a community token) pays a dollar invoice; the pool swaps it in the same transaction. The shop still gets exact dollars. |
-| 🏪 **Merchant dashboard** | Invoices matched on chain by memo, 99/1 split with the platform, refunds, signed webhooks, payout to a 2-of-3 team multisig. |
+| 🏪 **Merchant dashboard** | Sales grouped by day, full or partial refunds, 99/1 split with the platform, signed webhooks, payout to a 2-of-3 team multisig. |
+| 🔗 **Payment links** | A shop makes a link for an item and price. Each customer who opens it gets a fresh invoice; sales show the item name. |
 | 🛡 **Replay and expiry** | An invoice can be paid once and expires after 5 minutes of chain time. |
 | 🦊 **MetaMask path** | A Solidity contract (`PotCheckout`) holds dollars and captures part of them, through Portaldot's ERC-20 precompile. |
-| 🧩 **Pay button for other apps** | `@stabletap/sdk` gives any Portaldot app a `<PayButton/>` using the same open pay-link format. |
+| 🧩 **Pay button for other apps** | `@stabletap/sdk` gives any Portaldot app a `<PayButton/>` using the same open pay-link format. The `/developers` page has copy-paste setup and a live button. |
 
 ---
 
@@ -131,13 +132,15 @@ same data from our indexer.
 
 - **Live testnet, by script with hard checks:** setup, payment, split, refund, pay with PORT and
   the multisig payout above (`pnpm --filter @stabletap/engine live:flows`).
+- **Hosted app on the live testnet, two phones:** counter sale, partial refund, payment-link sale,
+  customer history with the refund, and sale totals checked against balances.
 - **Hosted app on the live testnet, in Chrome:** new wallets funded by the faucet, POS charges
   $1.00, the customer sees "with a tPOT fee: would fail", pays, receipt shows fee in dollars and
   tPOT spent 0.00, POS turns Paid (block #156435).
 - **Hosted MetaMask checkout on the live testnet, in Chrome** (EIP-6963 test wallet): hold $3,
   replay rejected, shop captures $2 ($1 back), refunds $1, balances exact, no console errors.
 - **On a local fork of the testnet (Chopsticks):** every flow in the browser, including tap to
-  pay, the pool gauge, webhooks, refunds, the team wallet, the partner Pay button, and the
+  pay, the pool gauge, webhooks, refunds, the team wallet, the Pay button, and the
   contract against the real runtime and precompile (deploy, pay, replay rejected, hold $50,
   capture $42, refund).
 - **Tests:** engine 7 unit + 6 fork, indexer 6, web 1, SDK 2, contracts 6.
@@ -145,8 +148,8 @@ same data from our indexer.
 **Limits:** testnet only, pUSD is a test token we issue, not audited. Each account needs the
 0.1 tPOT existential deposit once ("never spends tPOT", not "holds zero"). MetaMask transactions
 pay gas in tPOT: on this testnet a pay or hold costs ≈ 3.9 tPOT (gas plus storage deposit), capture
-and refund ≈ 0.02 tPOT. "Tap" is a fixed NFC sticker at the counter, not phone-to-phone NFC. The hosted app has no
-platform address set, so its sales are not split (the 99/1 split is proven by the script above).
+and refund ≈ 0.02 tPOT. "Tap" is a fixed NFC sticker at the counter, not phone-to-phone NFC. The hosted app
+takes a 1% platform share on every sale (`NEXT_PUBLIC_STABLETAP_PLATFORM_ADDRESS` and `_BPS`).
 The SDK is not published to npm yet.
 
 ---
@@ -181,7 +184,7 @@ Use Chrome on Android, Safari 18+ on iPhone, or desktop Chrome.
 ```text
 packages/engine   Payment engine: invoices, pay, split, refund, swap, payout, block decoder
 packages/sdk      @stabletap/sdk and the React PayButton
-apps/web          Wallet, POS, dashboard, stats, tap page, MetaMask checkout, partner demo
+apps/web          Wallet, POS, sales, payment links, hosted link checkout, developer docs, stats, MetaMask checkout
 apps/indexer      Finalized-block indexer, API, webhooks, tap terminals
 contracts         PotCheckout.sol and Hardhat tests
 spike             Fee-in-pUSD feasibility check on a Chopsticks fork
