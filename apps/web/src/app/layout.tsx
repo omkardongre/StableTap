@@ -1,5 +1,10 @@
 import type { Metadata, Viewport } from "next";
+import { Inter } from "next/font/google";
+import { TopBar } from "@/components/TopBar";
 import "./globals.css";
+
+// Self-hosted at build time by next/font, so the CSP's font-src 'self' still holds.
+const inter = Inter({ subsets: ["latin"], variable: "--font-sans", display: "swap" });
 
 export const metadata: Metadata = {
   title: "StableTap",
@@ -9,13 +14,14 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#0b1020",
+  themeColor: "#ffffff",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" className={inter.variable}>
       <body>
+        <TopBar />
         <main className="shell">{children}</main>
       </body>
     </html>

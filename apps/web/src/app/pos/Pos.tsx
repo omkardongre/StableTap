@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { decodeAddress, encodeAddress } from "@polkadot/util-crypto";
 import { chainNow, encodeInvoice, newInvoiceId, parseAmount, watchInvoice, type Invoice, type PaidEvent } from "@stabletap/engine";
 import { Qr } from "@/components/Qr";
@@ -101,7 +100,6 @@ export function Pos() {
               Settings
             </button>
           )}
-          <Link href="/">Home</Link>
         </span>
       </div>
       {error && (

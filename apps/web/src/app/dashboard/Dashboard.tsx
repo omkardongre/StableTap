@@ -97,12 +97,11 @@ export function Dashboard() {
   const takings = today.reduce((s, r) => s + (r.kind === "payment" ? merchantAmount(r, vault?.address ?? "") : -merchantAmount(r, vault?.address ?? "")), 0n);
 
   return (
-    <section className="stack" aria-live="polite">
+    <section className="stack wide" aria-live="polite">
       <div className="row">
         <h1>Dashboard</h1>
         <span className="row small">
           <Link href="/pos">POS</Link>
-          <Link href="/">Home</Link>
         </span>
       </div>
       {error && (

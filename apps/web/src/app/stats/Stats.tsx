@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { errorText, shortHash, tpot, usd } from "@/lib/format";
 import { fetchStats, indexerEnabled, type Stats as StatsData } from "@/lib/indexer";
 import { NATIVE_SYMBOL, explorerLink, network } from "@/lib/network";
@@ -32,12 +31,9 @@ export function Stats() {
   const price = stats && stats.pool.native > 0n ? (stats.pool.stable * 10n ** 14n) / stats.pool.native : null;
 
   return (
-    <section className="stack" aria-live="polite">
+    <section className="stack wide" aria-live="polite">
       <div className="row">
         <h1>On-chain stats</h1>
-        <Link href="/" className="small">
-          Home
-        </Link>
       </div>
       <p className="muted small">Read from finalized Portaldot blocks. Every number below links back to a transaction.</p>
       {error && (

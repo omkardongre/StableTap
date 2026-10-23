@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { mnemonicGenerate } from "@polkadot/util-crypto";
 import {
   InvoiceExpiredError, assertNotExpired, chainNow, decodeInvoice, getBalances, nativeFeeCheck, pay, payWithAsset, quoteFee, quoteSwapPay, splitAmounts,
@@ -219,9 +218,6 @@ export function Wallet() {
     <section className="stack" aria-live="polite">
       <div className="row">
         <h1>Wallet</h1>
-        <Link href="/" className="small">
-          Home
-        </Link>
       </div>
       {alert && (
         <p className="alert" role="alert">
