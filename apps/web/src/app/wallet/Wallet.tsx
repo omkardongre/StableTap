@@ -4,15 +4,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { mnemonicGenerate } from "@polkadot/util-crypto";
 import {
-  InvoiceExpiredError, assertNotExpired, chainNow, decodeInvoice, getBalances, pay, payWithAsset, quoteFee, quoteSwapPay, splitAmounts,
+  InvoiceExpiredError, assertNotExpired, chainNow, decodeInvoice, getBalances, nativeFeeCheck, pay, payWithAsset, quoteFee, quoteSwapPay, splitAmounts,
   type Invoice, type Receipt, type SwapQuote,
 } from "@stabletap/engine";
 import { formatAmount } from "@stabletap/engine/config";
+import { PoolGauge, type PoolAsset } from "@/components/PoolGauge";
 import { Scanner } from "@/components/Scanner";
 import { getApi } from "@/lib/chain";
 import { errorText, shortHash, tpot, usd } from "@/lib/format";
 import { pairFrom, withUnlockedPair } from "@/lib/keys";
-import { NATIVE_SYMBOL, network } from "@/lib/network";
+import { NATIVE_SYMBOL, STABLE_SYMBOL, network } from "@/lib/network";
 import { findPaid, recordPaid } from "@/lib/paid";
 import { usePayAssets, type PayAsset } from "@/lib/payAssets";
 import { useBalances } from "@/lib/useBalances";
@@ -23,8 +24,8 @@ type View =
   | { name: "setup"; supported: boolean }
   | { name: "home" }
   | { name: "scan" }
-  | { name: "confirm"; invoice: Invoice; fee: bigint | null; alts: AltQuote[] }
-  | { name: "paying"; invoice: Invoice; stage: string }
+  | { name: "confirm"; invoice: Invoice; fee: bigint | null; native: NativeCheck | null; alts: AltQuote[] }
+  | { name: "paying"; invoice: Invoice; stage: string; via: PayAsset | null }
   | { name: "receipt"; invoice: Invoice; receipt: Receipt; nativeSpent: bigint; paidWith: PaidWith | null }
   | { name: "phrase"; phrase: string };
 
@@ -35,7 +36,10 @@ interface AltQuote {
   error: string | null;
 }
 
+type NativeCheck = Awaited<ReturnType<typeof nativeFeeCheck>>;
+
 interface PaidWith {
+  id: number;
   symbol: string;
   decimals: number;
   spent: bigint;
@@ -51,8 +55,6 @@ export function Wallet() {
   const [busy, setBusy] = useState(false);
   const { balances, error: balanceError } = useBalances(vault?.address ?? null);
   const { assets: payAssets, error: assetError } = usePayAssets(vault?.address ?? null);
-  const payAssetsRef = useRef(payAssets);
-  payAssetsRef.current = payAssets;
 
   const openInvoice = useCallback(
     async (text: string, address: string) => {
@@ -73,27 +75,42 @@ export function Wallet() {
         setView({ name: "home" });
         return setError(e instanceof InvoiceExpiredError ? "Rejected: this invoice has expired. Ask the shop for a new one." : errorText(e));
       }
-      const held = payAssetsRef.current.filter((a) => a.balance > 0n);
-      setView({ name: "confirm", invoice, fee: null, alts: held.map((asset) => ({ asset, quote: null, error: null })) });
+      // Other tokens are offered by the effect below, as their balances load.
+      setView({ name: "confirm", invoice, fee: null, native: null, alts: [] });
       const api = await getApi();
       try {
-        const fee = await quoteFee(api, network, invoice, address);
-        setView((v) => (v.name === "confirm" && v.invoice.id === invoice.id ? { ...v, fee } : v));
+        const [fee, native] = await Promise.all([quoteFee(api, network, invoice, address), nativeFeeCheck(api, network, invoice, address)]);
+        setView((v) => (v.name === "confirm" && v.invoice.id === invoice.id ? { ...v, fee, native } : v));
       } catch (e) {
         setError(`Could not estimate the fee: ${errorText(e)}`);
-      }
-      for (const asset of held) {
-        let alt: AltQuote;
-        try {
-          alt = { asset, quote: await quoteSwapPay(api, network, invoice, asset.id, address), error: null };
-        } catch (e) {
-          alt = { asset, quote: null, error: errorText(e) };
-        }
-        setView((v) => (v.name === "confirm" && v.invoice.id === invoice.id ? { ...v, alts: v.alts.map((x) => (x.asset.id === asset.id ? alt : x)) } : v));
       }
     },
     [],
   );
+
+  // Offer each held pay asset on the confirm screen, also when balances arrive after the invoice
+  // was opened (a tap or deep link opens it before they load).
+  const confirmInvoice = view.name === "confirm" ? view.invoice : null;
+  const offered = useRef(new Set<string>());
+  useEffect(() => {
+    if (!confirmInvoice || !vault) return;
+    for (const asset of payAssets) {
+      const k = `${confirmInvoice.id}:${asset.id}`;
+      if (asset.balance === 0n || offered.current.has(k)) continue;
+      offered.current.add(k);
+      const forThis = (v: View) => v.name === "confirm" && v.invoice.id === confirmInvoice.id;
+      setView((v) => (forThis(v) && v.name === "confirm" ? { ...v, alts: [...v.alts, { asset, quote: null, error: null }] } : v));
+      void (async () => {
+        let alt: AltQuote;
+        try {
+          alt = { asset, quote: await quoteSwapPay(await getApi(), network, confirmInvoice, asset.id, vault.address), error: null };
+        } catch (e) {
+          alt = { asset, quote: null, error: errorText(e) };
+        }
+        setView((v) => (forThis(v) && v.name === "confirm" ? { ...v, alts: v.alts.map((x) => (x.asset.id === asset.id ? alt : x)) } : v));
+      })();
+    }
+  }, [confirmInvoice, payAssets, vault]);
 
   useEffect(() => {
     (async () => {
@@ -151,14 +168,15 @@ export function Wallet() {
     setError(null);
     const nativeBefore = balances.native;
     try {
-      setView({ name: "paying", invoice, stage: "Confirm with your fingerprint…" });
+      const via = alt?.asset ?? null;
+      setView({ name: "paying", invoice, stage: "Confirm with your fingerprint…", via });
       const api = await getApi();
-      const onStage = (stage: string) => setView({ name: "paying", invoice, stage: stage === "signed" ? "Sending…" : "In a block, waiting for finality…" });
+      const onStage = (stage: string) => setView({ name: "paying", invoice, via, stage: stage === "signed" ? "Sending…" : "In a block, waiting for finality…" });
       let paidWith: PaidWith | null = null;
       const receipt = await withUnlockedPair(vault, async (pair) => {
         if (!alt) return pay(api, network, invoice, pair, onStage);
         const r = await payWithAsset(api, network, invoice, alt.asset.id, alt.quote.maxIn, pair, onStage);
-        paidWith = { symbol: alt.asset.symbol, decimals: alt.asset.decimals, spent: r.spentIn, fee: r.feePaid };
+        paidWith = { id: alt.asset.id, symbol: alt.asset.symbol, decimals: alt.asset.decimals, spent: r.spentIn, fee: r.feePaid };
         return r;
       });
       recordPaid(invoice.to, invoice.id, receipt.txHash);
@@ -186,6 +204,16 @@ export function Wallet() {
 
   const alert = error ?? balanceError ?? assetError;
   const empty = balances !== null && balances.native === 0n && balances.stable === 0n;
+  // Pools a swap payment moves: shown from the choice to the receipt, so the change is visible.
+  const swapAssets: PoolAsset[] =
+    view.name === "confirm"
+      ? view.alts.map((a) => a.asset)
+      : view.name === "paying" && view.via
+        ? [view.via]
+        : view.name === "receipt" && view.paidWith
+          ? [view.paidWith]
+          : [];
+  const gaugeAssets: PoolAsset[] = swapAssets.length ? [...swapAssets, { id: network.assetId, symbol: STABLE_SYMBOL, decimals: network.decimals }] : [];
 
   return (
     <section className="stack" aria-live="polite">
@@ -283,6 +311,16 @@ export function Wallet() {
             <dd>{view.fee === null ? "estimating…" : `≈ ${usd(view.fee)}`}</dd>
             <dt>Paid in</dt>
             <dd>dollars (not {NATIVE_SYMBOL})</dd>
+            {view.native && (
+              <>
+                <dt>With a {NATIVE_SYMBOL} fee</dt>
+                <dd className={view.native.payable ? undefined : "bad"}>
+                  {view.native.payable
+                    ? `≈ ${tpot(view.native.fee)} ${NATIVE_SYMBOL}`
+                    : `would fail: needs ${tpot(view.native.fee)} ${NATIVE_SYMBOL}, you can spend ${tpot(view.native.spendable)}`}
+                </dd>
+              </>
+            )}
             <dt>Invoice</dt>
             <dd className="mono small">{view.invoice.id}</dd>
             {view.invoice.split && (
@@ -386,6 +424,8 @@ export function Wallet() {
           </button>
         </>
       )}
+
+      {gaugeAssets.length > 0 && <PoolGauge assets={gaugeAssets} />}
 
       {view.name === "phrase" && (
         <div className="card">

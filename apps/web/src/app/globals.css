@@ -69,3 +69,6 @@ dl.kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 .paybutton button { min-height: 48px; border-radius: var(--radius); border: 0; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
 .paybutton button:disabled { opacity: 0.6; }
 .paybutton [role="alert"] { color: #ffd1d1; }
+.bad { color: #ffb0b0; }
+.up { color: #8ff0c0; }
+.down { color: #ffb0b0; }

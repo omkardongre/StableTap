@@ -8,6 +8,9 @@ import { Qr } from "@/components/Qr";
 import { getApi } from "@/lib/chain";
 import { errorText, shortHash, usd } from "@/lib/format";
 import { network, options } from "@/lib/network";
+import {
+  clearCharge, createTerminal, forgetTerminal, loadTerminal, nfcWriteSupported, publishCharge, tapUrl, terminalEnabled, writeTag, type TerminalCreds,
+} from "@/lib/terminal";
 import { loadVault } from "@/lib/vault";
 
 interface Shop {
@@ -49,6 +52,7 @@ export function Pos() {
   const [view, setView] = useState<View | null>(null);
   const [digits, setDigits] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [terminal, setTerminal] = useState<TerminalCreds | null>(null);
 
   useEffect(() => {
     try {
@@ -60,6 +64,15 @@ export function Pos() {
       setView({ name: "setup" });
     }
   }, []);
+
+  useEffect(() => {
+    if (!shop || !terminalEnabled()) return setTerminal(null);
+    try {
+      setTerminal(loadTerminal(shop.payout));
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }, [shop]);
 
   async function charge() {
     if (!shop) return;
@@ -98,15 +111,18 @@ export function Pos() {
       )}
 
       {view?.name === "setup" && (
-        <ShopSettings
-          initial={shop}
-          onSave={(s) => {
-            localStorage.setItem(SHOP_KEY, JSON.stringify(s));
-            setShop(s);
-            setError(null);
-            setView({ name: "keypad" });
-          }}
-        />
+        <>
+          <ShopSettings
+            initial={shop}
+            onSave={(s) => {
+              localStorage.setItem(SHOP_KEY, JSON.stringify(s));
+              setShop(s);
+              setError(null);
+              setView({ name: "keypad" });
+            }}
+          />
+          {shop && terminalEnabled() && <TapSetup merchant={shop.payout} terminal={terminal} onChange={setTerminal} />}
+        </>
       )}
 
       {view?.name === "keypad" && (
@@ -143,6 +159,7 @@ export function Pos() {
         <Charging
           invoice={view.invoice}
           link={view.link}
+          terminal={terminal}
           onPaid={(paid) => setView({ name: "paid", invoice: view.invoice, paid })}
           onExpired={() => setView({ name: "expired", invoice: view.invoice })}
           onError={(e) => setError(e)}
@@ -201,6 +218,7 @@ export function Pos() {
 function Charging({
   invoice,
   link,
+  terminal,
   onPaid,
   onExpired,
   onError,
@@ -208,6 +226,7 @@ function Charging({
 }: {
   invoice: Invoice;
   link: string;
+  terminal: TerminalCreds | null;
   onPaid: (p: PaidEvent) => void;
   onExpired: () => void;
   onError: (e: string) => void;
@@ -217,6 +236,26 @@ function Charging({
   cbs.current = { onPaid, onExpired, onError };
   const [watching, setWatching] = useState(false);
   const [left, setLeft] = useState<number | null>(null);
+
+  // Publish this charge to the counter tag; withdraw it when the sale ends (paid, expired or cancelled).
+  const [tap, setTap] = useState<"off" | "publishing" | "on" | "failed">(terminal ? "publishing" : "off");
+  useEffect(() => {
+    if (!terminal) return;
+    let live = true;
+    publishCharge(terminal, link)
+      .then(() => live && setTap("on"))
+      .catch((e: unknown) => {
+        if (!live) return;
+        setTap("failed");
+        cbs.current.onError(`Tap to pay is off for this sale: ${errorText(e)}. The QR still works.`);
+      });
+    return () => {
+      live = false;
+      clearCharge(terminal).catch(() => {
+        // The indexer also drops a charge once it is paid or expired.
+      });
+    };
+  }, [terminal, link]);
 
   useEffect(() => {
     let stop: (() => void) | undefined;
@@ -256,8 +295,9 @@ function Charging({
   const expired = left !== null && left <= 0;
   return (
     <div className="card">
-      <span className="label">Scan to pay {invoice.merchant}</span>
+      <span className="label">{tap === "on" ? "Tap or scan" : "Scan"} to pay {invoice.merchant}</span>
       <span className="big">{usd(invoice.amount)}</span>
+      {tap === "on" && !expired && <span className="small">Tag at the counter is live for this sale</span>}
       {!expired && <Qr value={link} label={`Payment QR code for ${usd(invoice.amount)}`} />}
       <p className="muted" aria-busy={!watching}>
         {!watching ? "Connecting…" : expired ? "Expired. Checking for a payment already sent…" : `Waiting for payment… expires in ${fmtLeft(left)}`}
@@ -322,6 +362,88 @@ function ShopSettings({ initial, onSave }: { initial: Shop | null; onSave: (s: S
         Save
       </button>
     </form>
+  );
+}
+
+/** One-time setup of the counter tag: register this POS as a terminal, then write its URL to an NFC sticker. */
+function TapSetup({ merchant, terminal, onChange }: { merchant: string; terminal: TerminalCreds | null; onChange: (t: TerminalCreds | null) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const writing = useRef<AbortController | null>(null);
+  useEffect(() => () => writing.current?.abort(), []);
+
+  async function setup() {
+    setBusy(true);
+    setError(null);
+    try {
+      onChange(await createTerminal(merchant));
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function write(url: string) {
+    writing.current?.abort();
+    const ctl = new AbortController();
+    writing.current = ctl;
+    setError(null);
+    setStatus("Hold an NFC sticker to the back of this phone…");
+    try {
+      await writeTag(url, ctl.signal);
+      setStatus("Tag written. Stick it on the counter.");
+    } catch (e) {
+      setStatus(null);
+      if (!ctl.signal.aborted) setError(errorText(e));
+    }
+  }
+
+  const url = terminal ? tapUrl(terminal.id) : null;
+  return (
+    <div className="card">
+      <h2>Tap to pay</h2>
+      <p className="muted small">
+        A sticker at the counter opens the current sale on the customer&apos;s phone. Any NFC phone opens it without an app. The same link works as a printed QR.
+      </p>
+      {!url ? (
+        <button className="btn" onClick={() => void setup()} disabled={busy}>
+          {busy ? "Setting up…" : "Set up tap to pay"}
+        </button>
+      ) : (
+        <>
+          <span className="label">Counter tag link</span>
+          <span className="mono small">{url}</span>
+          {nfcWriteSupported() ? (
+            <button className="btn" onClick={() => void write(url)}>
+              Write NFC tag
+            </button>
+          ) : (
+            <p className="muted small">To write the sticker, open this page in Chrome on Android, or write the link with any NFC app.</p>
+          )}
+          <Qr value={url} label="Counter QR code for tap to pay" />
+          <button className="btn" onClick={() => navigator.clipboard.writeText(url)}>
+            Copy tag link
+          </button>
+          <button
+            className="btn"
+            onClick={() => {
+              forgetTerminal();
+              onChange(null);
+            }}
+          >
+            Forget this terminal
+          </button>
+        </>
+      )}
+      {status && <p role="status">{status}</p>}
+      {error && (
+        <p className="alert" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 
