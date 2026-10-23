@@ -1,0 +1,50 @@
+{
+  "network": "Portaldot V3 testnet (EVM)",
+  "chainId": 420420777,
+  "rpc": "https://test-evm-rpc-v3.portaldot.dev",
+  "pusdPrecompile": "0x00001E6100000000000000000000000000010000",
+  "potCheckout": "0x7510b0A07fE47B293c2F4f097AC1FBFC5CfA7e48",
+  "deployTx": {
+    "txHash": "0xe2cc14b8d9404e00816b09761b3aa5f9c0a651d936b235d90a4583188ddd1b40",
+    "block": 156790,
+    "gasUsed": "7564330784193040"
+  },
+  "accounts": {
+    "customer": "0x18DD7b945aAb902034617A1a2Cdc0D936A464cFA",
+    "merchant": "0x3E79403610c21de20144960A0694b578EBc0dcDF"
+  },
+  "permitAndPay": {
+    "amount": "4500000",
+    "txHash": "0xe5b4285d45f57f6657644316b2e292f3b1eec05c68d55e664cecf492d04171d7",
+    "block": 156799,
+    "gasUsed": "114832670675039",
+    "replayRejected": true
+  },
+  "permitAndHold": {
+    "amount": "50000000",
+    "txHash": "0xeb5055042fc36d8855519d29363990b14a0fe101e2e7260062216439129e090b",
+    "block": 156801,
+    "gasUsed": "114832672409153"
+  },
+  "capture": {
+    "captured": "42000000",
+    "releasedToPayer": "8000000",
+    "txHash": "0xf382a8bd0cd8fbd334a53e31dea7d727b7c545052b8ace2fb4d2215b23b50bc9",
+    "block": 156803,
+    "gasUsed": "551136239464"
+  },
+  "refund": {
+    "amount": "2000000",
+    "txHash": "0xf8be005f01c55fc7ab64fca4561e1189844a2ca3c2d2a918de93341335da099e",
+    "block": 156805,
+    "gasUsed": "551044599568"
+  },
+  "balances": {
+    "customerBefore": "60000000",
+    "customerAfter": "15500000",
+    "merchantBefore": "5000000",
+    "merchantAfter": "49500000"
+  },
+  "note": "EVM transactions pay gas in tPOT; the stablecoin moves through the Assets ERC-20 precompile.",
+  "verifiedAt": "2026-10-23T06:38:21.434Z"
+}

@@ -34,8 +34,20 @@ const customer = createWalletClient({ account: privateKeyToAccount(key("EVM_CUST
 const merchant = createWalletClient({ account: privateKeyToAccount(key("EVM_MERCHANT_PRIVATE_KEY")), chain, transport });
 const pusd = assetPrecompile(PUSD_ASSET_ID);
 const token = await viem.getContractAt("MockPermitToken", pusd); // same ERC-20 + permit ABI as the precompile
+// Portaldot's eth-rpc can take a few blocks to index a transaction, so "not found" is retried until the timeout.
+async function receiptOf(hash: Hex) {
+  const until = Date.now() + 180_000;
+  for (;;) {
+    try {
+      return await publicClient.getTransactionReceipt({ hash });
+    } catch (e) {
+      if (Date.now() > until) throw e;
+      await new Promise((r) => setTimeout(r, 3_000));
+    }
+  }
+}
 const wait = async (hash: Hex, what: string) => {
-  const r = await publicClient.waitForTransactionReceipt({ hash, timeout: 180_000 });
+  const r = await receiptOf(hash);
   if (r.status !== "success") throw new Error(`${what} reverted (${hash})`);
   console.log(`${what}: ${hash} (block ${r.blockNumber}, gas ${r.gasUsed})`);
   return { txHash: hash, block: Number(r.blockNumber), gasUsed: r.gasUsed.toString() };
@@ -46,6 +58,8 @@ console.log(`chain ${await publicClient.getChainId()} | pUSD precompile ${pusd} 
 
 let address = process.env.POT_CHECKOUT_ADDRESS?.trim() as Hex | undefined;
 let deployTx: { txHash: Hex; block: number; gasUsed: string } | null = null;
+const knownDeployTx = process.env.POT_CHECKOUT_DEPLOY_TX?.trim() as Hex | undefined;
+if (address && knownDeployTx) deployTx = await wait(knownDeployTx, "deploy PotCheckout (earlier run)");
 if (!address) {
   const { contract, deploymentTransaction } = await viem.sendDeploymentTransaction("PotCheckout", [pusd]);
   deployTx = await wait(deploymentTransaction.hash, "deploy PotCheckout");
