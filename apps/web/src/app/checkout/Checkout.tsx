@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
 import { formatUnits, getAddress, isAddress, parseUnits, type Address, type Hex, type WalletClient } from "viem";
 import { newInvoiceId } from "@stabletap/engine/invoice";
 import {
@@ -16,6 +15,8 @@ interface Token {
   decimals: number;
 }
 
+/** Measured on Portaldot V3 testnet: permitAndPay / permitAndHold use ≈3.9 tPOT of gas and storage deposit. */
+const LOW_GAS = 4n * 10n ** 18n;
 type Row = Awaited<ReturnType<typeof merchantPayments>>[number];
 
 const SHOP_KEY = "stabletap.checkout.shop.v1";
@@ -27,6 +28,7 @@ export function Checkout() {
   const [conn, setConn] = useState<{ wallet: WalletClient; account: Address; name: string } | null>(null);
   const [token, setToken] = useState<Token | null>(null);
   const [balance, setBalance] = useState<bigint | null>(null);
+  const [gas, setGas] = useState<bigint | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -46,10 +48,20 @@ export function Checkout() {
     })().catch((e: unknown) => setError(`Can't read the checkout contract: ${evmErrorText(e)}`));
   }, []);
 
-  const refreshBalance = useCallback(async () => {
-    if (!conn || !token) return;
-    setBalance(await evmPublic().readContract({ address: token.address, abi: TOKEN_ABI, functionName: "balanceOf", args: [conn.account] }));
-  }, [conn, token]);
+  // After a write, read at the receipt's block: Portaldot's eth-rpc can still answer "latest" from the block before.
+  const refreshBalance = useCallback(
+    async (blockNumber?: bigint) => {
+      if (!conn || !token) return;
+      const pub = evmPublic();
+      const [stable, native] = await Promise.all([
+        pub.readContract({ address: token.address, abi: TOKEN_ABI, functionName: "balanceOf", args: [conn.account], blockNumber }),
+        pub.getBalance({ address: conn.account, blockNumber }),
+      ]);
+      setBalance(stable);
+      setGas(native);
+    },
+    [conn, token],
+  );
   useEffect(() => void refreshBalance().catch((e: unknown) => setError(evmErrorText(e))), [refreshBalance]);
 
   async function connect(w: DiscoveredWallet) {
@@ -69,8 +81,8 @@ export function Checkout() {
     setNote(null);
     try {
       const r = await fn();
+      await refreshBalance(r?.blockNumber);
       if (r) setNote(`${label}: done in block #${r.blockNumber}, tx ${r.hash.slice(0, 10)}…${r.hash.slice(-8)}`);
-      await refreshBalance();
     } catch (e) {
       setError(evmErrorText(e));
     } finally {
@@ -83,7 +95,6 @@ export function Checkout() {
       <section className="stack">
         <h1>MetaMask checkout</h1>
         <p className="alert">The MetaMask checkout isn&apos;t configured for this deployment (NEXT_PUBLIC_STABLETAP_EVM_* and the contract address).</p>
-        <Link href="/">Home</Link>
       </section>
     );
   }
@@ -91,12 +102,9 @@ export function Checkout() {
   const fmt = (v: bigint) => (token ? `$${formatUnits(v, token.decimals)}` : "…");
 
   return (
-    <section className="stack" aria-live="polite">
+    <section className="stack wide" aria-live="polite">
       <div className="row">
         <h1>MetaMask checkout</h1>
-        <Link href="/" className="small">
-          Home
-        </Link>
       </div>
       <p className="muted small">
         The same {token?.symbol ?? "pUSD"} through Portaldot&apos;s ERC-20 precompile, held and settled by the PotCheckout contract. Gas is paid in tPOT on this path.
@@ -125,6 +133,10 @@ export function Checkout() {
           <span className="label">Connected ({conn.name})</span>
           <span className="mono small">{conn.account}</span>
           <span className="big">{balance === null ? "…" : fmt(balance)}</span>
+          <span className="muted small">Gas: {gas === null ? "…" : `${Number(formatUnits(gas, 18)).toFixed(2)} tPOT`}</span>
+          {gas !== null && gas < LOW_GAS && (
+            <p className="alert small">Low on tPOT. On this testnet a pay or hold costs about 3.9 tPOT in gas and storage; capture and refund cost about 0.02.</p>
+          )}
           <span className="muted small">
             Contract <span className="mono">{checkoutAddress()}</span>
           </span>

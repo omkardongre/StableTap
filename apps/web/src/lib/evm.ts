@@ -56,7 +56,12 @@ export function evmChain() {
 
 let publicClient: PublicClient | null = null;
 export function evmPublic(): PublicClient {
-  publicClient ??= createPublicClient({ chain: evmChain(), transport: http(options.evm!.rpc) });
+  // pallet-revive's eth-rpc caps concurrent requests and answers bursts with errors that carry no CORS headers.
+  // Batching keeps the page to a few requests at a time; retries with backoff cover the rest.
+  publicClient ??= createPublicClient({
+    chain: evmChain(),
+    transport: http(options.evm!.rpc, { batch: { batchSize: 50, wait: 16 }, retryCount: 5, retryDelay: 400 }),
+  });
   return publicClient;
 }
 
@@ -190,5 +195,7 @@ export function evmErrorText(e: unknown): string {
   if (/WrongStatus/.test(s)) return "Not possible in this state";
   if (/BadAmount/.test(s)) return "Amount is not allowed (zero, or more than held or paid)";
   if (/User rejected|denied/i.test(s)) return "Cancelled in the wallet";
+  // Portaldot's eth-rpc answers an unaffordable transaction with a bare 1010 "Invalid Transaction".
+  if (/Invalid Transaction|insufficient funds|unknown RPC error/i.test(s)) return "The network refused the transaction. Usually this means not enough tPOT for gas.";
   return short;
 }
