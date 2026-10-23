@@ -32,6 +32,15 @@ export interface Webhook {
   signedAt: number;
 }
 
+/** A POS terminal behind a fixed NFC tag. Its charges can only pay `merchant`. */
+export interface Terminal {
+  id: string;
+  /** SHA-256 of the terminal's write token; the token itself is shown to the POS once. */
+  tokenHash: Buffer;
+  merchant: string;
+  charge: { link: string; expiresAt: number } | null;
+}
+
 export interface Delivery {
   id: string;
   merchant: string;
@@ -87,6 +96,14 @@ CREATE TABLE IF NOT EXISTS deliveries (
   delivered_at INTEGER
 ) STRICT;
 CREATE INDEX IF NOT EXISTS deliveries_due ON deliveries (status, next_attempt_at);
+CREATE TABLE IF NOT EXISTS terminals (
+  id TEXT PRIMARY KEY,
+  token_hash BLOB NOT NULL,
+  merchant TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  charge_link TEXT,
+  charge_expires_at INTEGER
+) STRICT;
 `;
 
 /** Merchant view: payments that sent it stablecoin, and refunds it signed. */
@@ -250,6 +267,28 @@ export class Store {
         .prepare(`SELECT id, status, attempts, last_error, delivered_at FROM deliveries WHERE merchant = ? ORDER BY rowid DESC LIMIT ?`)
         .all(merchant, limit) as { id: string; status: string; attempts: number; last_error: string | null; delivered_at: number | null }[]
     ).map((d) => ({ id: d.id, status: d.status, attempts: d.attempts, lastError: d.last_error, deliveredAt: d.delivered_at }));
+  }
+
+  createTerminal(t: { id: string; tokenHash: Buffer; merchant: string; createdAt: number }): void {
+    this.db.prepare(`INSERT INTO terminals (id, token_hash, merchant, created_at) VALUES (?, ?, ?, ?)`).run(t.id, t.tokenHash, t.merchant, t.createdAt);
+  }
+
+  getTerminal(id: string): Terminal | null {
+    const row = this.db.prepare(`SELECT id, token_hash, merchant, charge_link, charge_expires_at FROM terminals WHERE id = ?`).get(id) as
+      | { id: string; token_hash: Uint8Array; merchant: string; charge_link: string | null; charge_expires_at: number | null }
+      | undefined;
+    if (!row) return null;
+    return {
+      id: row.id,
+      tokenHash: Buffer.from(row.token_hash),
+      merchant: row.merchant,
+      charge: row.charge_link === null || row.charge_expires_at === null ? null : { link: row.charge_link, expiresAt: row.charge_expires_at },
+    };
+  }
+
+  /** Set (or clear, with null) the charge a terminal's NFC tag currently points to. */
+  setTerminalCharge(id: string, charge: { link: string; expiresAt: number } | null): void {
+    this.db.prepare(`UPDATE terminals SET charge_link = ?, charge_expires_at = ? WHERE id = ?`).run(charge?.link ?? null, charge?.expiresAt ?? null, id);
   }
 
   private withTransfers(rows: unknown[]): StoredRecord[] {

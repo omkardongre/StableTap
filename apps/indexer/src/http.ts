@@ -1,8 +1,9 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { ApiPromise } from "@polkadot/api";
-import { NATIVE, normalizeAddress, withId, type NetworkConfig } from "@stabletap/engine";
+import { NATIVE, chainNow, normalizeAddress, withId, type NetworkConfig } from "@stabletap/engine";
 import type { Store, StoredRecord } from "./db.ts";
 import type { IndexerStatus } from "./indexer.ts";
+import { clearCharge, createTerminal, currentCharge, publishCharge } from "./terminals.ts";
 import { HttpError, newSecret, validateWebhookUrl, verifyRegistration } from "./webhooks.ts";
 
 export interface ApiDeps {
@@ -34,8 +35,8 @@ export function createApi(deps: ApiDeps): Server {
     if (origin && deps.corsOrigins.includes(origin)) {
       res.setHeader("access-control-allow-origin", origin);
       res.setHeader("vary", "origin");
-      res.setHeader("access-control-allow-methods", "GET, PUT, DELETE");
-      res.setHeader("access-control-allow-headers", "content-type");
+      res.setHeader("access-control-allow-methods", "GET, POST, PUT, DELETE");
+      res.setHeader("access-control-allow-headers", "content-type, authorization");
       res.setHeader("access-control-max-age", "600");
     }
     if (req.method === "OPTIONS") return send(res, 204, null);
@@ -57,6 +58,32 @@ export function createApi(deps: ApiDeps): Server {
         pool: { native, stable },
         recent: deps.store.recentRecords(20),
       });
+    }
+
+    if (parts[0] === "v1" && parts[1] === "terminals") {
+      if (req.method === "POST" && parts.length === 2) {
+        rateLimit(req);
+        const body = await readJson(req);
+        if (typeof body.merchant !== "string") throw new HttpError(400, "Send { merchant }");
+        const merchant = addressParam(body.merchant, deps.net.ss58);
+        return send(res, 201, { ...createTerminal(deps.store, merchant, Date.now()), merchant });
+      }
+      if (parts.length === 4 && parts[3] === "charge" && parts[2]) {
+        const id = parts[2];
+        const auth = req.headers.authorization;
+        if (req.method === "GET") {
+          // No open charge is a normal state (the shop isn't charging), not an error.
+          return send(res, 200, { charge: currentCharge(deps.store, deps.net, id, await chainNow(deps.api)) });
+        }
+        if (req.method === "PUT") {
+          const body = await readJson(req);
+          return send(res, 200, publishCharge(deps.store, deps.net, id, auth, body.link, await chainNow(deps.api)));
+        }
+        if (req.method === "DELETE") {
+          clearCharge(deps.store, id, auth);
+          return send(res, 200, { cleared: true });
+        }
+      }
     }
 
     if (parts[0] === "v1" && parts[1] === "merchants" && parts[2]) {

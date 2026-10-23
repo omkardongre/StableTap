@@ -3,8 +3,9 @@ import { test } from "node:test";
 import { Keyring } from "@polkadot/keyring";
 import { u8aToHex, stringToU8a } from "@polkadot/util";
 import { cryptoWaitReady } from "@polkadot/util-crypto";
-import { webhookRegistrationMessage as registrationMessage, type ChainRecord, type NetworkConfig, type ScannedBlock } from "@stabletap/engine";
+import { encodeInvoice, webhookRegistrationMessage as registrationMessage, type ChainRecord, type NetworkConfig, type ScannedBlock } from "@stabletap/engine";
 import { Store } from "../src/db.ts";
+import { clearCharge, createTerminal, currentCharge, publishCharge } from "../src/terminals.ts";
 import {
   HttpError, eventPayload, isPublicIp, sign, validateWebhookUrl, verifyRegistration,
 } from "../src/webhooks.ts";
@@ -107,5 +108,26 @@ test("webhook registration needs the merchant's signature, fresh and newer than 
   assert.throws(() => verifyRegistration(s, CHARLIE, url, now - 600, sig(url, now - 600), now), /within 5 minutes/);
   s.putWebhook({ merchant: CHARLIE, url, secret: "whsec_AAAA", signedAt: now });
   assert.throws(() => verifyRegistration(s, CHARLIE, url, now, sig(url, now), now), /newer registration/, "replayed registration");
+  s.close();
+});
+
+test("a terminal's tag opens only its own merchant's open charge, and drops it once paid or expired", () => {
+  const s = new Store(":memory:");
+  const now = 1_800_000_000;
+  const { id, token } = createTerminal(s, CHARLIE, now * 1000);
+  const auth = `Bearer ${token}`;
+  const link = (to: string, exp: number, invId = "inv-1") => encodeInvoice({ to, amount: 4_500_000n, id: invId, merchant: "Cafe", expiresAt: exp }, 42);
+
+  assert.throws(() => publishCharge(s, net, id, "Bearer " + "x".repeat(43), link(CHARLIE, now + 300), now), /Invalid terminal token/);
+  assert.throws(() => publishCharge(s, net, id, auth, link(BOB, now + 300), now), /its own merchant/);
+  assert.throws(() => publishCharge(s, net, id, auth, link(CHARLIE, now + 3600), now), /within 15 minutes/);
+  publishCharge(s, net, id, auth, link(CHARLIE, now + 300), now);
+  assert.equal(currentCharge(s, net, id, now)?.link, link(CHARLIE, now + 300));
+  assert.equal(currentCharge(s, net, id, now + 301), null, "expired");
+
+  publishCharge(s, net, id, auth, link(CHARLIE, now + 300), now);
+  s.applyBlock(block(30, [rec({ blockNumber: 30, blockHash: "0xb30" })]), (r, m) => eventPayload(net, r, m));
+  assert.equal(currentCharge(s, net, id, now), null, "already paid on chain");
+  clearCharge(s, id, auth);
   s.close();
 });
