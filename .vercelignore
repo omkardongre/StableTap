@@ -1,0 +1,24 @@
+# Never upload secrets or local state.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+**/.env.setup
+**/data/
+*.db
+*.db-*
+*.sqlite
+# Not needed to build the web app.
+node_modules
+**/node_modules
+**/.next
+**/dist
+contracts/artifacts
+contracts/cache
+contracts/types
+packages/engine/metadata
+evidence
+spike
+deploy

@@ -33,3 +33,5 @@ apps/indexer/data/
 *.db
 *.db-shm
 *.db-wal
+# vercel cli project link
+.vercel/

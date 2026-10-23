@@ -1,4 +1,4 @@
-# StableTap
+# StableTap: full reference
 
 Pay in dollars on Portaldot V3 without spending the network token. The fee is paid in the stablecoin too.
 
@@ -115,7 +115,7 @@ pnpm --filter @stabletap/sdk test             # builds, then tests the built out
 pnpm --filter @stabletap/sdk check:package    # publint + are-the-types-wrong
 ```
 
-The engine is bundled into the SDK; polkadot.js and React stay as dependencies/peers. See [packages/sdk/README.md](packages/sdk/README.md). The web app's `/partner` page is a stand-in partner app whose checkout is only the SDK's `PayButton`.
+The engine is bundled into the SDK; polkadot.js and React stay as dependencies/peers. See [packages/sdk/README.md](../packages/sdk/README.md). The web app's `/partner` page is a stand-in partner app whose checkout is only the SDK's `PayButton`.
 
 ## Contract (MetaMask path)
 
@@ -129,6 +129,7 @@ The engine is bundled into the SDK; polkadot.js and React stay as dependencies/p
 pnpm --filter @stabletap/contracts test          # 6 Hardhat tests (node:test + viem)
 pnpm --filter @stabletap/contracts fork:check    # deploy + all flows against the real runtime and precompile on the Chopsticks fork
 pnpm --filter @stabletap/contracts live          # deploy + flows on the testnet (needs contracts/.env, see .env.example)
+# reuse the deployed contract: POT_CHECKOUT_ADDRESS=0x7510b0A07fE47B293c2F4f097AC1FBFC5CfA7e48
 ```
 
 Costs on V3 (pallet-revive storage deposits, in tPOT, reserved from the caller): deploying the 3.3 KB contract ≈ 260, each new invoice ≈ 3.84 (one 32-byte slot). That's why the native Substrate path stays the main one: it needs no contract and no tPOT. EVM gas is also paid in tPOT.
