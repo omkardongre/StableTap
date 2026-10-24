@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { PhoneMock } from "@/components/PhoneMock";
 import { ShopButton } from "./ShopButton";
 
@@ -50,9 +49,6 @@ export default function Business() {
 
       <footer className="footer">
         <span>Demo on a test network. Not real money.</span>
-        <span>
-          <Link href="/developers">For developers</Link>
-        </span>
       </footer>
     </div>
   );

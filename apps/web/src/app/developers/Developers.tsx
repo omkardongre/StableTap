@@ -74,7 +74,7 @@ export function Developers() {
         ) : (
           <>
             <p className="muted small">Set up your shop to try the button with your own shop wallet.</p>
-            <Link className="btn" href="/pos">
+            <Link className="btn" href="/shop">
               Set up my shop
             </Link>
           </>

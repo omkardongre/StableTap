@@ -43,7 +43,7 @@ export function Links() {
         <div className="card">
           <h2>No shop on this phone yet</h2>
           <p className="muted">Set up your shop first, then make links to sell online.</p>
-          <Link className="btn primary" href="/pos">
+          <Link className="btn primary" href="/shop">
             Set up my shop
           </Link>
         </div>

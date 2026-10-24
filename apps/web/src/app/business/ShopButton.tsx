@@ -14,13 +14,13 @@ export function ShopButton() {
     try {
       if (localStorage.getItem(SHOP_KEY) === null) return;
       setHasShop(true);
-      router.replace("/pos");
+      router.replace("/shop");
     } catch {
       // Storage blocked: treat as a new owner.
     }
   }, [router]);
   return (
-    <Link className="btn primary hero-btn" href="/pos">
+    <Link className="btn primary hero-btn" href="/shop">
       {hasShop ? "Open my shop" : "Set up my shop"}
     </Link>
   );

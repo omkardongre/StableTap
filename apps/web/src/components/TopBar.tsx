@@ -2,10 +2,10 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 /** Pages of the business side (shop till, sales, business landing). Everything else is the customer side. */
-const BUSINESS = ["/business", "/pos", "/dashboard", "/links", "/developers"];
+const BUSINESS = ["/business", "/shop", "/sales", "/links", "/developers"];
 const BUSINESS_LINKS = [
-  { href: "/pos", label: "Shop" },
-  { href: "/dashboard", label: "Sales" },
+  { href: "/shop", label: "Shop" },
+  { href: "/sales", label: "Sales" },
   { href: "/links", label: "Links" },
 ] as const;
 export function TopBar() {

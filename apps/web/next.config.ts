@@ -39,6 +39,13 @@ const nextConfig: NextConfig = {
   env: { NEXT_PUBLIC_BUILD_ID: buildId },
   poweredByHeader: false,
   typedRoutes: true,
+  // Old route names (shared links, bookmarks, docs) keep working.
+  async redirects() {
+    return [
+      { source: "/pos", destination: "/shop", permanent: true },
+      { source: "/dashboard", destination: "/sales", permanent: true },
+    ];
+  },
   async headers() {
     return [
       {

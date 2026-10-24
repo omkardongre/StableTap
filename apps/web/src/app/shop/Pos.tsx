@@ -13,7 +13,6 @@ import {
 } from "@/lib/terminal";
 import { pairFrom } from "@/lib/keys";
 import { createVault, loadVault, passkeyPrfSupported, type VaultRecord } from "@/lib/vault";
-import { TeamWallet } from "../dashboard/TeamWallet";
 
 interface Shop {
   name: string;
@@ -97,7 +96,15 @@ export function Pos() {
 
   return (
     <section className="stack" aria-live="polite">
-      {shop && (
+      {shop && view?.name === "setup" && (
+        <div className="stack tight">
+          <button type="button" className="link-btn back-btn" onClick={() => setView({ name: "keypad" })}>
+            ‹ Back
+          </button>
+          <h1>Settings</h1>
+        </div>
+      )}
+      {shop && view?.name !== "setup" && (
         <div className="row">
           <h1>{shop.name}</h1>
           {view?.name === "keypad" && (
@@ -128,11 +135,14 @@ export function Pos() {
             }}
           />
           {shop && terminalEnabled() && <TapSetup merchant={shop.payout} terminal={terminal} onChange={setTerminal} />}
-          {shop && <MoreSettings payout={shop.payout} />}
           {shop && (
-            <button className="btn" onClick={() => setView({ name: "keypad" })}>
-              Back to the till
-            </button>
+            <Link className="card setting-link" href="/wallet">
+              <span>
+                <strong>Personal wallet</strong>
+                <span className="muted small">Pay at other shops with your own money</span>
+              </span>
+              <span aria-hidden="true">›</span>
+            </Link>
           )}
         </>
       )}
@@ -372,8 +382,9 @@ function ShopSettings({ initial, onSave }: { initial: Shop | null; onSave: (s: S
   const first = !initial;
   return (
     <form className="card" onSubmit={(e) => void save(e)}>
-      <h2>{first ? "Name your shop" : "Shop settings"}</h2>
-      {!first && (
+      {first ? (
+        <h2>Name your shop</h2>
+      ) : (
         <label className="field-label" htmlFor="shop-name">
           Shop name
         </label>
@@ -406,12 +417,6 @@ function ShopSettings({ initial, onSave }: { initial: Shop | null; onSave: (s: S
         {busy ?? (custom || wallet ? "Save" : "Create my shop")}
       </button>
       {first && !busy && <p className="muted small center">Secured with your fingerprint.</p>}
-      {/* Sending sales to an existing wallet is an advanced option, offered only after setup. */}
-      {!first && (
-        <button type="button" className="link-btn" onClick={() => setCustom((c) => !c)} disabled={busy !== null}>
-          {custom ? (wallet ? "Use my shop wallet instead" : "Create a shop wallet instead") : "Send sales to another wallet"}
-        </button>
-      )}
     </form>
   );
 }
@@ -490,9 +495,12 @@ function TapSetup({ merchant, terminal, onChange }: { merchant: string; terminal
           <button className="btn" onClick={() => navigator.clipboard.writeText(url)}>
             Copy sticker link
           </button>
+          {/* Rarely used and it stops the printed sticker working, so it is small and asks first. */}
           <button
-            className="btn"
+            type="button"
+            className="link-btn muted-link"
             onClick={() => {
+              if (!window.confirm("Remove tap to pay? Your sticker and printed QR code stop working.")) return;
               forgetTerminal();
               onChange(null);
             }}
@@ -514,42 +522,4 @@ function TapSetup({ merchant, terminal, onChange }: { merchant: string; terminal
 function fmtLeft(sec: number | null): string {
   if (sec === null || !Number.isFinite(sec)) return "…";
   return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
-}
-
-/** Less common shop tools, kept off the till: the team payout wallet and developer tools. */
-function MoreSettings({ payout }: { payout: string }) {
-  const [vault, setVault] = useState<VaultRecord | null>(null);
-  useEffect(() => {
-    try {
-      const v = loadVault("shop");
-      // Team payouts sign with the shop wallet, so they only apply when sales go to it.
-      setVault(v && v.address === payout ? v : null);
-    } catch {
-      setVault(null);
-    }
-  }, [payout]);
-  return (
-    <>
-      {vault && (
-        <details className="card">
-          <summary>Team wallet</summary>
-          <TeamWallet vault={vault} suggested={0n} />
-        </details>
-      )}
-      <Link className="card setting-link" href="/wallet">
-        <span>
-          <strong>Personal wallet</strong>
-          <span className="muted small">Pay at other shops with your own money</span>
-        </span>
-        <span aria-hidden="true">›</span>
-      </Link>
-      <Link className="card setting-link" href="/developers">
-        <span>
-          <strong>For developers</strong>
-          <span className="muted small">Pay button for your website, payment notifications</span>
-        </span>
-        <span aria-hidden="true">›</span>
-      </Link>
-    </>
-  );
 }

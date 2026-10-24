@@ -7,7 +7,7 @@ Pay in dollars on Portaldot V3 without spending the network token. The fee is pa
 - Workspace setup (pnpm monorepo, Node 24)
 - `spike/`: proof that a payment's fee can be paid in a stablecoin on the Portaldot V3 runtime, on a local fork
 - `packages/engine/`: shared payment logic (invoice link with expiry and optional platform split, pay and refund with fee in pUSD, block decoder, paid-watcher, faucet funding, pUSD + pool setup)
-- `apps/web/`: customer wallet (`/wallet`), merchant POS (`/pos`), merchant dashboard (`/dashboard`) and public stats (`/stats`), Next.js 16
+- `apps/web/`: customer wallet (`/wallet`), shop keypad (`/shop`), sales (`/sales`), payment links (`/links`) and public stats (`/stats`), Next.js 16
 - `apps/indexer/`: indexes StableTap payments and refunds from finalized blocks into SQLite, serves history and stats, delivers signed webhooks
 - `contracts/`: `PotCheckout.sol` (Hardhat 3): invoice registry with replay guard, hold/capture, refunds, EIP-2612 permit, for pUSD through Portaldot's ERC-20 asset precompile
 - `packages/sdk/`: `@stabletap/sdk`, the engine as a publishable ESM package plus a React `<PayButton/>` (the `/developers` page uses it like a third-party app)
@@ -75,7 +75,7 @@ Against another network, copy `apps/web/.env.example` to `apps/web/.env.local` a
 | `NEXT_PUBLIC_STABLETAP_ASSET_DECIMALS` | browser + server | pUSD decimals (checked on chain) |
 | `FAUCET_SURI` | server only, secret | funded account for `POST /api/faucet` |
 | `FAUCET_STABLE_AMOUNT` | server only | test pUSD per new wallet |
-| `NEXT_PUBLIC_STABLETAP_INDEXER` | browser, optional | indexer API for `/dashboard`, `/stats`, webhooks (added to CSP `connect-src`) |
+| `NEXT_PUBLIC_STABLETAP_INDEXER` | browser, optional | indexer API for `/sales`, `/stats`, wallet history, webhooks (added to CSP `connect-src`) |
 | `NEXT_PUBLIC_STABLETAP_EXPLORER` | browser, optional | explorer base URL for tx links (`#/extrinsics/<block>-<index>`) |
 | `NEXT_PUBLIC_STABLETAP_PLATFORM_ADDRESS` / `_BPS` | browser, optional, both or neither | platform share split off every POS invoice (max 1000 bps) |
 | `NEXT_PUBLIC_STABLETAP_PAY_ASSETS` | browser, optional | other asset ids a customer may pay with (each needs a pool against tPOT) |
@@ -105,7 +105,7 @@ Pool gauge: when a customer pays with another token, the wallet shows the live r
 
 MetaMask checkout (`/checkout`, needs the `NEXT_PUBLIC_STABLETAP_EVM_*` and checkout variables): finds browser wallets with EIP-6963, adds or switches to the Portaldot EVM chain, and pays or holds pUSD in `PotCheckout` with one EIP-2612 permit signature plus one transaction. The shop side lists holds and payments from the contract's events and can capture (the rest returns to the payer), release a hold, or refund. Each write is simulated first, so contract errors (replay, expiry, amount) are shown before the wallet prompt.
 
-Dashboard (`/dashboard`): uses this device's wallet as the shop's payout account. It lists invoices matched by memo (merchant share, platform share, fee in pUSD, refunds), shows today's takings, refunds a payment (full or partial, up to what's left) with a passkey-signed refund that also pays its fee in pUSD, and registers a webhook. "Team wallet" sends takings to a pallet-multisig account (e.g. 2 of 3); the address is derived from the signatories and threshold, and a new team account is activated once through the faucet.
+Sales (`/sales`): uses this device's wallet as the shop's payout account. It lists invoices matched by memo (merchant share, platform share, fee in pUSD, refunds), shows today's takings, refunds a payment (full or partial, up to what's left) with a passkey-signed refund that also pays its fee in pUSD, and registers a webhook. "Team wallet" sends takings to a pallet-multisig account (e.g. 2 of 3); the address is derived from the signatories and threshold, and a new team account is activated once through the faucet.
 
 ## SDK and Pay button
 

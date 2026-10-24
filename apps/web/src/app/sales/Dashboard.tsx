@@ -9,11 +9,15 @@ import { clockText, dayText, errorText, usd, usdFee, whenText } from "@/lib/form
 import { fetchMerchantRecords, historyInSync, indexerEnabled, merchantAmount, type IndexedRecord } from "@/lib/indexer";
 import { withUnlockedPair } from "@/lib/keys";
 import { linkIdOf, linkItems } from "@/lib/links";
-import { network } from "@/lib/network";
+import { explorerLink, network } from "@/lib/network";
 import { useBalances } from "@/lib/useBalances";
 import { loadVault, type VaultRecord } from "@/lib/vault";
 
 const REFRESH_MS = 6_000;
+/** Sales shown at first, and added by each "Show more". */
+const SALES_PAGE = 10;
+/** How long a confirmation stays up (long enough to read, then out of the way). */
+const NOTICE_MS = 6_000;
 /** History a few blocks behind is normal right after a payment; only warn when it stays behind this long. */
 const STALE_WARN_MS = 60_000;
 
@@ -43,7 +47,16 @@ export function Dashboard() {
   const [now, setNow] = useState(() => Date.now());
   // Refunds this phone just sent, shown right away until the history lists them.
   const [sent, setSent] = useState<IndexedRecord[]>([]);
+  const [shown, setShown] = useState(SALES_PAGE);
+  // Records cover sales and refunds; fetch a margin so "shown" sales are all there.
+  const limit = Math.min(200, shown * 2 + 10);
   const { balances } = useBalances(vault?.address ?? null);
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), NOTICE_MS);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   useEffect(() => {
     try {
@@ -55,12 +68,12 @@ export function Dashboard() {
   }, []);
 
   const load = useCallback(async (merchant: string) => {
-    const [recs, sync] = await Promise.allSettled([fetchMerchantRecords(merchant), historyInSync()]);
+    const [recs, sync] = await Promise.allSettled([fetchMerchantRecords(merchant, limit), historyInSync()]);
     if (recs.status === "fulfilled") setRecords(recs.value);
     const ok = recs.status === "fulfilled" && sync.status === "fulfilled" && sync.value;
     setBehindSince((since) => (ok ? null : (since ?? Date.now())));
     setNow(Date.now());
-  }, []);
+  }, [limit]);
 
   useEffect(() => {
     if (!vault || !indexerEnabled()) return;
@@ -78,7 +91,7 @@ export function Dashboard() {
         <div className="card">
           <h2>No shop on this phone yet</h2>
           <p className="muted">Set up your shop first. Your sales show up here.</p>
-          <Link className="btn primary" href="/pos">
+          <Link className="btn primary" href="/shop">
             Set up my shop
           </Link>
         </div>
@@ -92,7 +105,7 @@ export function Dashboard() {
   const startOfDay = new Date().setHours(0, 0, 0, 0);
   const todays = sales.filter((s) => s.payment.timestamp >= startOfDay);
   const todayRefunds = all.filter((r) => r.kind === "refund" && r.timestamp >= startOfDay);
-  const days = groupByDay(sales);
+  const days = groupByDay(sales.slice(0, shown));
   // What the shop keeps today: received after the service fee, minus refunds it sent.
   const takings = todays.reduce((s, x) => s + x.received, 0n) - todayRefunds.reduce((s, r) => s + merchantAmount(r, vault.address), 0n);
   const stale = !indexerEnabled() || (behindSince !== null && now - behindSince > STALE_WARN_MS);
@@ -151,8 +164,7 @@ export function Dashboard() {
                     <span className="sale-main">
                       <strong>{usd(s.amount)}</strong>
                       <span className="muted small">
-                        {s.item ? `${s.item} · ` : ""}
-                        {clockText(s.payment.timestamp)}
+                        {s.item ?? "Counter sale"} · {clockText(s.payment.timestamp)}
                       </span>
                     </span>
                     {s.refunded > 0n && <span className="chip">{s.refunded >= s.amount ? "Refunded" : `Refunded ${usd(s.refunded)}`}</span>}
@@ -165,6 +177,11 @@ export function Dashboard() {
             </ul>
               </div>
             ))}
+            {(sales.length > shown || (records !== null && records.length >= limit && limit < 200)) && (
+              <button type="button" className="link-btn" onClick={() => setShown((n) => n + SALES_PAGE)}>
+                Show more
+              </button>
+            )}
           </div>
         </>
       )}
@@ -215,6 +232,7 @@ function SaleDetail({ sale, onBack, onRefund }: { sale: Sale; onBack: () => void
   const p = sale.payment;
   const refundable = sale.amount - sale.refunded;
   const [copied, setCopied] = useState(false);
+  const explorer = explorerLink(p.blockNumber);
   return (
     <div className="card">
       <BackButton onClick={onBack} />
@@ -225,12 +243,8 @@ function SaleDetail({ sale, onBack, onRefund }: { sale: Sale; onBack: () => void
         </span>
       </div>
       <dl className="kv">
-        {sale.item && (
-          <>
-            <dt>Item</dt>
-            <dd>{sale.item} (payment link)</dd>
-          </>
-        )}
+        <dt>Sold by</dt>
+        <dd>{sale.item ? `Payment link · ${sale.item}` : "Counter"}</dd>
         <dt>Date</dt>
         <dd>{whenText(p.timestamp)}</dd>
         {sale.received < sale.amount && (
@@ -261,6 +275,11 @@ function SaleDetail({ sale, onBack, onRefund }: { sale: Sale; onBack: () => void
           {copied ? "Copied" : "Copy transaction ID"}
         </button>
       </details>
+      {explorer && (
+        <a className="link-btn" href={explorer} target="_blank" rel="noopener noreferrer">
+          View on Portaldot explorer ↗
+        </a>
+      )}
       {refundable > 0n && (
         <button type="button" className="btn primary" onClick={onRefund}>
           Refund
