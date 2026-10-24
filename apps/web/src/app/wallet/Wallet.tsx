@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { mnemonicGenerate } from "@polkadot/util-crypto";
 import {
-  InvoiceExpiredError, assertNotExpired, chainNow, decodeInvoice, pay, payWithAsset, quoteFee, quoteSwapPay,
+  InvoiceExpiredError, assertNotExpired, chainNow, decodeInvoice, encodeInvoice, pay, payWithAsset, quoteFee, quoteSwapPay,
   type Invoice, type Receipt, type SwapQuote,
 } from "@stabletap/engine";
 import { formatAmount } from "@stabletap/engine/config";
@@ -11,10 +11,11 @@ import { PoolGauge, type PoolAsset } from "@/components/PoolGauge";
 import { Scanner } from "@/components/Scanner";
 import { getApi } from "@/lib/chain";
 import Link from "next/link";
-import { errorText, usd, usdFee, whenText } from "@/lib/format";
+import { errorText, shortHash, usd, usdFee, whenText } from "@/lib/format";
 import { fetchPayerRecords, indexerEnabled, type IndexedRecord } from "@/lib/indexer";
 import { pairFrom, withUnlockedPair } from "@/lib/keys";
-import { STABLE_SYMBOL, network } from "@/lib/network";
+import { linkInvoice, parseLink } from "@/lib/links";
+import { STABLE_SYMBOL, explorerLink, network } from "@/lib/network";
 import { findPaid, paidNames, recentPayments, recordPaid, type RecentPayment } from "@/lib/paid";
 import { usePayAssets, type PayAsset } from "@/lib/payAssets";
 import { useBalances } from "@/lib/useBalances";
@@ -29,7 +30,8 @@ type View =
   | { name: "confirm"; invoice: Invoice; fee: bigint | null; alts: AltQuote[] }
   | { name: "paying"; invoice: Invoice; stage: string; via: PayAsset | null }
   | { name: "receipt"; invoice: Invoice; receipt: Receipt; paidWith: PaidWith | null }
-  | { name: "phrase"; phrase: string };
+  | { name: "phrase"; phrase: string }
+  | { name: "activity"; item: Activity };
 
 /** Paying a pUSD invoice with another token, swapped on the way. */
 interface AltQuote {
@@ -38,8 +40,28 @@ interface AltQuote {
   error: string | null;
 }
 
-/** A payment link waiting for this new wallet (survives the passkey prompt and a reload). */
-const PENDING_KEY = "stabletap.pending-pay.v1";
+/** A payment waiting for this new wallet (survives the passkey prompt and a reload). */
+const PENDING_KEY = "stabletap.pending-pay.v2";
+/** Recent rows shown at first, and added by each "Show more". */
+const RECENT_PAGE = 5;
+/** How long a faucet message stays up: long enough to read, then out of the way. */
+const NOTICE_MS = 6_000;
+
+/** The code to pay, plus the payment link it came from (if any) so an expired code can be renewed. */
+interface Pending {
+  link: string;
+  from: string | null;
+  invoice: Invoice;
+}
+
+function readPending(): { link: string; from: string | null } | null {
+  try {
+    const v = JSON.parse(sessionStorage.getItem(PENDING_KEY) ?? "null") as { link?: unknown; from?: unknown } | null;
+    return v && typeof v.link === "string" ? { link: v.link, from: typeof v.from === "string" ? v.from : null } : null;
+  } catch {
+    return null;
+  }
+}
 
 interface PaidWith {
   id: number;
@@ -56,19 +78,30 @@ export function Wallet() {
   const [view, setView] = useState<View>({ name: "loading" });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Which faucet button is waiting: the stablecoin ("stable") or another asset id.
-  const [funding, setFunding] = useState<"stable" | number | null>(null);
+  // The test-dollar faucet is running.
+  const [funding, setFunding] = useState<"stable" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Faucet problems are not payment errors: they clear themselves like the success notice.
+  const [fundError, setFundError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!notice && !fundError) return;
+    const t = setTimeout(() => {
+      setNotice(null);
+      setFundError(null);
+    }, NOTICE_MS);
+    return () => clearTimeout(t);
+  }, [notice, fundError]);
   const [recent, setRecent] = useState<RecentPayment[]>([]);
   // The same history from the chain: covers other devices and refunds the shop sent back.
   const [chainRecent, setChainRecent] = useState<IndexedRecord[] | null>(null);
   // A payment link opened before this person had a wallet: kept until they can pay it.
-  const [pending, setPending] = useState<{ link: string; invoice: Invoice } | null>(null);
+  const [pending, setPending] = useState<Pending | null>(null);
+  const [shown, setShown] = useState(RECENT_PAGE);
   // Refresh the list whenever the wallet comes back to its home screen (e.g. after a payment).
   useEffect(() => {
     if (view.name !== "home") return setNotice(null);
     try {
-      setRecent(recentPayments());
+      setRecent(recentPayments(50));
     } catch {
       setRecent([]);
     }
@@ -78,7 +111,8 @@ export function Wallet() {
     if (view.name !== "home" || !vault || !indexerEnabled()) return;
     let live = true;
     const load = () =>
-      fetchPayerRecords(vault.address, 10)
+      // One extra row tells whether there is more to show.
+      fetchPayerRecords(vault.address, Math.min(100, shown + 1))
         .then((r) => live && setChainRecent(r))
         .catch(() => undefined);
     void load();
@@ -87,7 +121,7 @@ export function Wallet() {
       live = false;
       clearInterval(t);
     };
-  }, [view.name, vault]);
+  }, [view.name, vault, shown]);
   const { assets: payAssets, error: assetError } = usePayAssets(vault?.address ?? null);
 
   const openInvoice = useCallback(
@@ -152,34 +186,28 @@ export function Wallet() {
         const stored = loadVault();
         const params = new URLSearchParams(window.location.search);
         const incoming = params.get("pay");
+        const from = params.get("from");
         if (incoming) window.history.replaceState(null, "", window.location.pathname);
+        const keep = (p: { link: string; from: string | null } | null) => {
+          if (!p) return;
+          try {
+            setPending({ ...p, invoice: decodeInvoice(p.link, network.ss58) });
+            sessionStorage.setItem(PENDING_KEY, JSON.stringify(p));
+          } catch {
+            sessionStorage.removeItem(PENDING_KEY);
+          }
+        };
         if (!stored) {
           // New customer from a payment link: create the wallet first, then come back to this payment.
-          const keep = incoming ?? sessionStorage.getItem(PENDING_KEY);
-          if (keep) {
-            try {
-              setPending({ link: keep, invoice: decodeInvoice(keep, network.ss58) });
-              sessionStorage.setItem(PENDING_KEY, keep);
-            } catch {
-              sessionStorage.removeItem(PENDING_KEY);
-            }
-          }
+          keep(incoming ? { link: incoming, from } : readPending());
           return setView({ name: "setup", supported: await passkeyPrfSupported() });
         }
         setVault(stored);
         setView({ name: "home" });
         // Payment links opened directly (e.g. from an NFC tag or a checkout page): /wallet?pay=<portaldot:pay?...>
-        const link = incoming ?? sessionStorage.getItem(PENDING_KEY);
-        if (link && !incoming) {
-          // Left over from wallet setup: finish it once there are dollars to pay with (effect below).
-          try {
-            setPending({ link, invoice: decodeInvoice(link, network.ss58) });
-          } catch {
-            sessionStorage.removeItem(PENDING_KEY);
-          }
-        } else if (link) {
-          await openInvoice(link, stored.address);
-        }
+        if (incoming) await openInvoice(incoming, stored.address);
+        // Left over from wallet setup: finish it once there are dollars to pay with (effect below).
+        else keep(readPending());
       } catch (e) {
         setError(errorText(e));
         setView({ name: "setup", supported: false });
@@ -192,9 +220,21 @@ export function Wallet() {
     if (!pending || !vault || !balances || view.name !== "home") return;
     if (balances.stable < pending.invoice.amount) return;
     sessionStorage.removeItem(PENDING_KEY);
-    const link = pending.link;
+    const p = pending;
     setPending(null);
-    void openInvoice(link, vault.address);
+    void (async () => {
+      let link = p.link;
+      try {
+        // Setup can outlast the code; a payment link can always make a fresh one.
+        const now = await chainNow(await getApi());
+        if (p.from && p.invoice.expiresAt !== undefined && now >= p.invoice.expiresAt) {
+          link = encodeInvoice(linkInvoice(parseLink(new URLSearchParams(p.from)), now), network.ss58);
+        }
+      } catch {
+        // Fall through: openInvoice reports an expired or broken code.
+      }
+      await openInvoice(link, vault.address);
+    })();
   }, [pending, vault, balances, view.name, openInvoice]);
 
   async function create() {
@@ -213,25 +253,27 @@ export function Wallet() {
     }
   }
 
-  async function fund(asset?: number) {
+  async function fund() {
     if (!vault) return;
-    setFunding(asset ?? "stable");
-    setError(null);
+    setFunding("stable");
+    setFundError(null);
     setNotice(null);
     try {
       const res = await fetch("/api/faucet", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address: vault.address, asset }),
+        body: JSON.stringify({ address: vault.address }),
         signal: AbortSignal.timeout(90_000),
       }).catch(() => {
         throw new Error("The test network didn't answer in time. Please try again.");
       });
       const body = (await res.json()) as { error?: string };
+      // The test faucet hands out dollars once per wallet.
+      if (res.status === 409) throw new Error("You already got your free test dollars.");
       if (!res.ok) throw new Error(body.error ?? `Faucet error ${res.status}`);
-      setNotice(asset === undefined ? "+$20 test dollars added" : "Test coins added");
+      setNotice("+$20 test dollars added");
     } catch (e) {
-      setError(errorText(e));
+      setFundError(errorText(e));
     } finally {
       setFunding(null);
     }
@@ -275,7 +317,7 @@ export function Wallet() {
     }
   }
 
-  const alert = error ?? balanceError ?? assetError;
+  const alert = error ?? fundError ?? balanceError ?? assetError;
   const activity = vault ? toActivity(chainRecent, recent, vault.address) : [];
   const empty = balances !== null && balances.native === 0n && balances.stable === 0n;
   // Pools a swap payment moves: shown from the choice to the receipt, so the change is visible.
@@ -310,7 +352,13 @@ export function Wallet() {
       {view.name === "setup" && (
         <div className="card">
           <h2>Create your wallet</h2>
-          <p className="muted">Pay shops in dollars. Secured with your fingerprint.</p>
+          {pending ? (
+            <p className="muted">
+              To pay {pending.invoice.merchant ?? "the shop"} <strong>{usd(pending.invoice.amount)}</strong>. Secured with your fingerprint.
+            </p>
+          ) : (
+            <p className="muted">Pay shops in dollars. Secured with your fingerprint.</p>
+          )}
           {view.supported ? (
             <button className="btn primary" onClick={create} disabled={busy}>
               {busy ? "Creating…" : "Create my wallet"}
@@ -355,17 +403,7 @@ export function Wallet() {
               <button className="btn primary" onClick={() => void fund()} disabled={funding !== null}>
                 {funding === "stable" ? "Adding dollars…" : "Get 20 free test dollars"}
               </button>
-              <p className="muted small center">{funding !== null ? "This takes up to a minute." : "Add dollars first, then scan a shop's code to pay."}</p>
-              {payAssets.length > 0 && (
-                <details className="more">
-                  <summary>More options</summary>
-                  {payAssets.map((a) => (
-                    <button key={a.id} className="btn" onClick={() => void fund(a.id)} disabled={funding !== null}>
-                      {funding === a.id ? "Adding…" : `Get test ${a.symbol} instead`}
-                    </button>
-                  ))}
-                </details>
-              )}
+              {funding !== null && <p className="muted small center">This takes up to a minute.</p>}
             </>
           ) : (
             <button
@@ -380,41 +418,61 @@ export function Wallet() {
             <div className="card">
               <h2 className="card-title">Recent</h2>
               <ul className="activity">
-                {activity.map((a) => (
+                {activity.slice(0, shown).map((a) => (
                   <li key={a.key}>
-                    <span>
-                      <strong>{a.title}</strong>
-                      <span className="muted small">
-                        {a.refund ? "Refund · " : ""}
-                        {whenText(a.at)}
+                    <button type="button" className="activity-row" onClick={() => setView({ name: "activity", item: a })}>
+                      <span>
+                        <strong>{a.title}</strong>
+                        <span className="muted small">
+                          {a.refund && a.title !== "Refund" ? "Refund · " : ""}
+                          {whenText(a.at)}
+                        </span>
                       </span>
-                    </span>
-                    <span className={`amount${a.refund ? " plus" : ""}`}>
-                      {a.refund ? "+" : "−"}
-                      {usd(a.amount)}
-                    </span>
+                      <span className={`amount${a.refund ? " plus" : ""}`}>
+                        {a.refund ? "+" : "−"}
+                        {usd(a.amount)}
+                      </span>
+                      <span className="chevron" aria-hidden="true">
+                        ›
+                      </span>
+                    </button>
                   </li>
                 ))}
               </ul>
+              {activity.length > shown && (
+                <button type="button" className="link-btn" onClick={() => setShown((n) => n + RECENT_PAGE * 2)}>
+                  Show more
+                </button>
+              )}
             </div>
           )}
           <details className="card">
             <summary>Account and backup</summary>
             <div className="stack">
-              <span className="label">Your address</span>
-              <span className="mono small">{vault.address}</span>
-              <button className="btn" onClick={() => navigator.clipboard.writeText(vault.address)}>
-                Copy address
-              </button>
-              <button className="btn" onClick={showPhrase}>
+              {/* The one thing everyone should do: without the phrase, a lost phone means lost money. */}
+              <p className="muted small">Write down your recovery phrase. It&apos;s the only way to get your money back if you lose this phone.</p>
+              <button className="btn primary" onClick={showPhrase}>
                 Show recovery phrase
               </button>
+              <div className="row">
+                <div className="stack tight">
+                  <span className="label">Your address</span>
+                  <span className="mono small" title={vault.address}>
+                    {shortHash(vault.address)}
+                  </span>
+                </div>
+                <CopyButton text={vault.address} label="Copy" />
+              </div>
               <Link className="link-btn" href="/business">
                 Have a shop? Open StableTap Business
               </Link>
             </div>
           </details>
         </>
+      )}
+
+      {vault && view.name === "activity" && (
+        <ActivityDetail item={view.item} payAssets={payAssets} onBack={() => setView({ name: "home" })} />
       )}
 
       {vault && view.name === "scan" && (
@@ -529,6 +587,11 @@ export function Wallet() {
                 <dd className="mono">{view.invoice.id}</dd>
               </dl>
               <CopyButton text={view.receipt.txHash} label="Copy transaction ID" />
+              {explorerLink(view.receipt.blockNumber) && (
+                <a className="link-btn" href={explorerLink(view.receipt.blockNumber)!} target="_blank" rel="noopener noreferrer">
+                  View on Portaldot explorer ↗
+                </a>
+              )}
             </details>
           </div>
           <button className="btn primary" onClick={() => setView({ name: "home" })}>
@@ -585,6 +648,56 @@ interface Activity {
   refund: boolean;
   at: number;
   amount: bigint;
+  /** Unknown (empty / 0 / null) for a payment from this device the history hasn't listed yet. */
+  invoiceId: string;
+  blockNumber: number;
+  /** The network fee this wallet paid (payments only; the shop pays for refunds). */
+  fee: { amount: bigint; assetId: number | null } | null;
+}
+
+/** One payment or refund, like the shop's sale detail: what, when, the fee, and the proof on chain. */
+function ActivityDetail({ item, payAssets, onBack }: { item: Activity; payAssets: PayAsset[]; onBack: () => void }) {
+  const explorer = explorerLink(item.blockNumber);
+  const feeAsset = item.fee && item.fee.assetId !== network.assetId ? payAssets.find((a) => a.id === item.fee!.assetId) : undefined;
+  return (
+    <div className="card">
+      <button type="button" className="link-btn back-btn" onClick={onBack}>
+        ‹ Back
+      </button>
+      <span className="label">{item.refund ? `Refund from ${item.title === "Refund" ? "a shop" : item.title}` : `Paid ${item.title}`}</span>
+      <div className="detail-head">
+        <span className="big">
+          {item.refund ? "+" : "−"}
+          {usd(item.amount)}
+        </span>
+        <span className="chip ok">{item.refund ? "Refunded" : "Paid"}</span>
+      </div>
+      <dl className="kv">
+        <dt>Date</dt>
+        <dd>{whenText(item.at)}</dd>
+        {item.fee && (
+          <>
+            <dt>Network fee</dt>
+            <dd>{feeAsset ? amt(item.fee.amount, feeAsset) : usdFee(item.fee.amount)}</dd>
+          </>
+        )}
+        {item.invoiceId && (
+          <>
+            <dt>Order</dt>
+            <dd className="mono small">{item.invoiceId}</dd>
+          </>
+        )}
+      </dl>
+      {explorer ? (
+        <a className="link-btn" href={explorer} target="_blank" rel="noopener noreferrer">
+          View on Portaldot explorer ↗
+        </a>
+      ) : (
+        <p className="muted small">The on-chain record shows up here in a few seconds.</p>
+      )}
+      <CopyButton text={item.key} label="Copy transaction ID" />
+    </div>
+  );
 }
 
 /** Payments and refunds from the chain, plus payments from this device the history hasn't caught up with yet. */
@@ -604,10 +717,20 @@ function toActivity(chain: IndexedRecord[] | null, local: RecentPayment[], me: s
     const amount = r.transfers.filter((t) => (refund ? t.to === me : t.from === me)).reduce((sum, t) => sum + t.amount, 0n);
     if (amount === 0n) continue;
     seen.add(r.txHash);
-    out.push({ key: r.txHash, title: names.get(r.invoiceId) ?? "Shop", refund, at: r.timestamp, amount });
+    out.push({
+      key: r.txHash,
+      title: names.get(r.invoiceId) ?? (refund ? "Refund" : "Payment"),
+      refund,
+      at: r.timestamp,
+      amount,
+      invoiceId: r.invoiceId,
+      blockNumber: r.blockNumber,
+      fee: refund ? null : r.fee,
+    });
   }
-  for (const p of local) if (!seen.has(p.txHash)) out.push({ key: p.txHash, title: p.merchant, refund: false, at: p.at, amount: p.amount });
-  return out.sort((a, b) => b.at - a.at).slice(0, 8);
+  for (const p of local)
+    if (!seen.has(p.txHash)) out.push({ key: p.txHash, title: p.merchant, refund: false, at: p.at, amount: p.amount, invoiceId: "", blockNumber: 0, fee: null });
+  return out.sort((a, b) => b.at - a.at);
 }
 
 function CopyButton({ text, label }: { text: string; label: string }) {

@@ -1,8 +1,8 @@
 "use client";
 
-import { normalizeAddress, parseAmount } from "@stabletap/engine";
+import { normalizeAddress, parseAmount, type Invoice } from "@stabletap/engine";
 import { formatAmount } from "@stabletap/engine/config";
-import { network } from "./network";
+import { network, options } from "./network";
 
 /**
  * Payment links: a reusable URL for one item at a fixed price, like Stripe or Coinbase Payment Links.
@@ -67,6 +67,21 @@ export function parseLink(params: URLSearchParams): Omit<PaymentLink, "createdAt
 export function checkoutName(shop: string, item: string): string {
   const full = `${shop} · ${item}`;
   return full.length <= SHOP_MAX ? full : `${full.slice(0, SHOP_MAX - 1)}…`;
+}
+
+/** Long enough to create a wallet and add test dollars before paying. */
+export const CHECKOUT_TTL_SEC = 15 * 60;
+
+/** A fresh invoice for one checkout of a link: one link, many customers, each payment matched on its own. */
+export function linkInvoice(link: Omit<PaymentLink, "createdAt">, chainNowSec: number): Invoice {
+  return {
+    to: link.to,
+    amount: link.amount,
+    id: checkoutInvoiceId(link.id),
+    merchant: checkoutName(link.shop, link.item),
+    expiresAt: chainNowSec + CHECKOUT_TTL_SEC,
+    ...(options.split ? { split: options.split } : {}),
+  };
 }
 
 // ---------- the shop's own list (this device) ----------

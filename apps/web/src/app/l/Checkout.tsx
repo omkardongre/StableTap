@@ -1,14 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { chainNow, encodeInvoice, type Invoice } from "@stabletap/engine";
+import { chainNow, encodeInvoice } from "@stabletap/engine";
 import { getApi } from "@/lib/chain";
 import { errorText, usd } from "@/lib/format";
-import { checkoutInvoiceId, checkoutName, parseLink, type PaymentLink } from "@/lib/links";
-import { network, options } from "@/lib/network";
-
-/** Long enough to create a wallet and add test dollars before paying. */
-const CHECKOUT_TTL_SEC = 15 * 60;
+import { linkInvoice, parseLink, type PaymentLink } from "@/lib/links";
+import { network } from "@/lib/network";
 
 /** Hosted checkout for a payment link: what you're buying, from whom, for how much, then pay. */
 export function LinkCheckout() {
@@ -29,17 +26,11 @@ export function LinkCheckout() {
     setBusy(true);
     setError(null);
     try {
-      // A fresh invoice per checkout: one link, many customers, each payment matched on its own.
-      const invoice: Invoice = {
-        to: link.to,
-        amount: link.amount,
-        id: checkoutInvoiceId(link.id),
-        merchant: checkoutName(link.shop, link.item),
-        expiresAt: (await chainNow(await getApi())) + CHECKOUT_TTL_SEC,
-        ...(options.split ? { split: options.split } : {}),
-      };
+      const invoice = linkInvoice(link, await chainNow(await getApi()));
       const url = new URL("/wallet", window.location.origin);
       url.searchParams.set("pay", encodeInvoice(invoice, network.ss58));
+      // The link itself, so a new customer whose code runs out during wallet setup gets a fresh one.
+      url.searchParams.set("from", window.location.search);
       window.location.assign(url.toString());
     } catch (e) {
       setError(errorText(e));

@@ -33,5 +33,10 @@ export const NATIVE_DECIMALS = 14;
 export const STABLE_SYMBOL = "pUSD";
 export const NATIVE_SYMBOL = "tPOT";
 
-export const explorerLink = (blockNumber: number, extrinsicIndex: number) =>
-  options.explorer ? `${options.explorer}/#/extrinsics/${blockNumber}-${extrinsicIndex}` : null;
+/**
+ * Explorer page for a payment. It opens the block's events: the Portaldot explorer lists no
+ * extrinsic for transactions whose fee is paid in an asset, but their events (transfers, the fee
+ * swap, AssetTxFeePaid) are all there. Null when no explorer is configured or the block is unknown.
+ */
+export const explorerLink = (blockNumber: number) =>
+  options.explorer && blockNumber > 0 ? `${options.explorer}/#/blocks/${blockNumber}?tab=events` : null;

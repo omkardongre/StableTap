@@ -44,7 +44,7 @@ export function recentPayments(limit = 5): RecentPayment[] {
     .filter((e) => typeof e.amount === "string" && /^\d+$/.test(e.amount))
     .sort((a, b) => b.at - a.at)
     .slice(0, limit)
-    .map((e) => ({ txHash: e.txHash, at: e.at, merchant: e.merchant || "Shop", amount: BigInt(e.amount as string) }));
+    .map((e) => ({ txHash: e.txHash, at: e.at, merchant: e.merchant || "Payment", amount: BigInt(e.amount as string) }));
 }
 
 /** Shop names this device saw when paying, by invoice id (the chain only stores the id). */
