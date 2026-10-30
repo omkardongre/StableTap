@@ -5,7 +5,7 @@ import { u8aToHex, stringToU8a } from "@polkadot/util";
 import { cryptoWaitReady } from "@polkadot/util-crypto";
 import { encodeInvoice, webhookRegistrationMessage as registrationMessage, type ChainRecord, type NetworkConfig, type ScannedBlock } from "@stabletap/engine";
 import { Store } from "../src/db.ts";
-import { clearCharge, createTerminal, currentCharge, publishCharge } from "../src/terminals.ts";
+import { saveLink } from "../src/links.ts";
 import {
   HttpError, eventPayload, isPublicIp, sign, validateWebhookUrl, verifyRegistration,
 } from "../src/webhooks.ts";
@@ -111,23 +111,19 @@ test("webhook registration needs the merchant's signature, fresh and newer than 
   s.close();
 });
 
-test("a terminal's tag opens only its own merchant's open charge, and drops it once paid or expired", () => {
+
+test("short payment links are validated, stored once, and a taken id is refused", () => {
   const s = new Store(":memory:");
-  const now = 1_800_000_000;
-  const { id, token } = createTerminal(s, CHARLIE, now * 1000);
-  const auth = `Bearer ${token}`;
-  const link = (to: string, exp: number, invId = "inv-1") => encodeInvoice({ to, amount: 4_500_000n, id: invId, merchant: "Cafe", expiresAt: exp }, 42);
-
-  assert.throws(() => publishCharge(s, net, id, "Bearer " + "x".repeat(43), link(CHARLIE, now + 300), now), /Invalid terminal token/);
-  assert.throws(() => publishCharge(s, net, id, auth, link(BOB, now + 300), now), /its own merchant/);
-  assert.throws(() => publishCharge(s, net, id, auth, link(CHARLIE, now + 3600), now), /within 15 minutes/);
-  publishCharge(s, net, id, auth, link(CHARLIE, now + 300), now);
-  assert.equal(currentCharge(s, net, id, now)?.link, link(CHARLIE, now + 300));
-  assert.equal(currentCharge(s, net, id, now + 301), null, "expired");
-
-  publishCharge(s, net, id, auth, link(CHARLIE, now + 300), now);
-  s.applyBlock(block(30, [rec({ blockNumber: 30, blockHash: "0xb30" })]), (r, m) => eventPayload(net, r, m));
-  assert.equal(currentCharge(s, net, id, now), null, "already paid on chain");
-  clearCharge(s, id, auth);
+  const body = { id: "ab12cd", item: "Chocolate cake", shop: "Sunrise Bakery", amount: "2000000", merchant: CHARLIE };
+  const saved = saveLink(s, 42, body, 1);
+  assert.deepEqual(s.getLink("ab12cd"), saved);
+  assert.deepEqual(saveLink(s, 42, body, 2), saved, "a retried request returns the same link");
+  assert.throws(() => saveLink(s, 42, { ...body, amount: "3000000" }, 3), /already taken/);
+  assert.throws(() => saveLink(s, 42, { ...body, id: "AB12CD" }, 3), /id must be/);
+  assert.throws(() => saveLink(s, 42, { ...body, id: "zz12cd", amount: "0" }, 3), /amount/);
+  assert.throws(() => saveLink(s, 42, { ...body, id: "zz12cd", item: "a\nb" }, 3), /item/);
+  assert.throws(() => saveLink(s, 42, { ...body, id: "zz12cd", shop: "x".repeat(41) }, 3), /shop/);
+  assert.throws(() => saveLink(s, 42, { ...body, id: "zz12cd", merchant: "nope" }, 3), /merchant/);
+  assert.equal(s.getLink("zz12cd"), null);
   s.close();
 });

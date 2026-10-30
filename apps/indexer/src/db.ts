@@ -32,13 +32,16 @@ export interface Webhook {
   signedAt: number;
 }
 
-/** A POS terminal behind a fixed NFC tag. Its charges can only pay `merchant`. */
-export interface Terminal {
+/** A short payment link: one item at a fixed price, paid to `merchant`. */
+export interface StoredLink {
   id: string;
-  /** SHA-256 of the terminal's write token; the token itself is shown to the POS once. */
-  tokenHash: Buffer;
+  item: string;
+  shop: string;
+  /** Stablecoin smallest units, as a decimal string. */
+  amount: string;
   merchant: string;
-  charge: { link: string; expiresAt: number } | null;
+  /** Unix ms. */
+  createdAt: number;
 }
 
 export interface Delivery {
@@ -96,13 +99,13 @@ CREATE TABLE IF NOT EXISTS deliveries (
   delivered_at INTEGER
 ) STRICT;
 CREATE INDEX IF NOT EXISTS deliveries_due ON deliveries (status, next_attempt_at);
-CREATE TABLE IF NOT EXISTS terminals (
+CREATE TABLE IF NOT EXISTS links (
   id TEXT PRIMARY KEY,
-  token_hash BLOB NOT NULL,
+  item TEXT NOT NULL,
+  shop TEXT NOT NULL,
+  amount TEXT NOT NULL,
   merchant TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  charge_link TEXT,
-  charge_expires_at INTEGER
+  created_at INTEGER NOT NULL
 ) STRICT;
 `;
 
@@ -285,26 +288,19 @@ export class Store {
     ).map((d) => ({ id: d.id, status: d.status, attempts: d.attempts, lastError: d.last_error, deliveredAt: d.delivered_at }));
   }
 
-  createTerminal(t: { id: string; tokenHash: Buffer; merchant: string; createdAt: number }): void {
-    this.db.prepare(`INSERT INTO terminals (id, token_hash, merchant, created_at) VALUES (?, ?, ?, ?)`).run(t.id, t.tokenHash, t.merchant, t.createdAt);
+  /** False when a link with this id already exists (nothing is changed). */
+  insertLink(l: StoredLink): boolean {
+    const r = this.db
+      .prepare(`INSERT OR IGNORE INTO links (id, item, shop, amount, merchant, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(l.id, l.item, l.shop, l.amount, l.merchant, l.createdAt);
+    return Number(r.changes) === 1;
   }
 
-  getTerminal(id: string): Terminal | null {
-    const row = this.db.prepare(`SELECT id, token_hash, merchant, charge_link, charge_expires_at FROM terminals WHERE id = ?`).get(id) as
-      | { id: string; token_hash: Uint8Array; merchant: string; charge_link: string | null; charge_expires_at: number | null }
+  getLink(id: string): StoredLink | null {
+    const row = this.db.prepare(`SELECT id, item, shop, amount, merchant, created_at FROM links WHERE id = ?`).get(id) as
+      | { id: string; item: string; shop: string; amount: string; merchant: string; created_at: number }
       | undefined;
-    if (!row) return null;
-    return {
-      id: row.id,
-      tokenHash: Buffer.from(row.token_hash),
-      merchant: row.merchant,
-      charge: row.charge_link === null || row.charge_expires_at === null ? null : { link: row.charge_link, expiresAt: row.charge_expires_at },
-    };
-  }
-
-  /** Set (or clear, with null) the charge a terminal's NFC tag currently points to. */
-  setTerminalCharge(id: string, charge: { link: string; expiresAt: number } | null): void {
-    this.db.prepare(`UPDATE terminals SET charge_link = ?, charge_expires_at = ? WHERE id = ?`).run(charge?.link ?? null, charge?.expiresAt ?? null, id);
+    return row ? { id: row.id, item: row.item, shop: row.shop, amount: row.amount, merchant: row.merchant, createdAt: row.created_at } : null;
   }
 
   private withTransfers(rows: unknown[]): StoredRecord[] {

@@ -1,9 +1,9 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { ApiPromise } from "@polkadot/api";
-import { NATIVE, chainNow, normalizeAddress, withId, type NetworkConfig } from "@stabletap/engine";
+import { NATIVE, normalizeAddress, withId, type NetworkConfig } from "@stabletap/engine";
 import type { Store, StoredRecord } from "./db.ts";
 import type { IndexerStatus } from "./indexer.ts";
-import { clearCharge, createTerminal, currentCharge, publishCharge } from "./terminals.ts";
+import { LINK_ID, saveLink } from "./links.ts";
 import { HttpError, newSecret, validateWebhookUrl, verifyRegistration } from "./webhooks.ts";
 
 export interface ApiDeps {
@@ -18,7 +18,7 @@ export interface ApiDeps {
 const MAX_BODY = 8 * 1024;
 const WRITE_LIMIT = { perMinute: 10 };
 
-/** JSON API. Read endpoints expose public chain data only; webhook writes need the merchant's signature. */
+/** JSON API. Read endpoints expose public chain data and public payment links; webhook writes need the merchant's signature. */
 export function createApi(deps: ApiDeps): Server {
   const writes = new Map<string, { count: number; resetAt: number }>();
 
@@ -60,29 +60,15 @@ export function createApi(deps: ApiDeps): Server {
       });
     }
 
-    if (parts[0] === "v1" && parts[1] === "terminals") {
+    if (parts[0] === "v1" && parts[1] === "links") {
       if (req.method === "POST" && parts.length === 2) {
         rateLimit(req);
-        const body = await readJson(req);
-        if (typeof body.merchant !== "string") throw new HttpError(400, "Send { merchant }");
-        const merchant = addressParam(body.merchant, deps.net.ss58);
-        return send(res, 201, { ...createTerminal(deps.store, merchant, Date.now()), merchant });
+        return send(res, 201, saveLink(deps.store, deps.net.ss58, await readJson(req), Date.now()));
       }
-      if (parts.length === 4 && parts[3] === "charge" && parts[2]) {
-        const id = parts[2];
-        const auth = req.headers.authorization;
-        if (req.method === "GET") {
-          // No open charge is a normal state (the shop isn't charging), not an error.
-          return send(res, 200, { charge: currentCharge(deps.store, deps.net, id, await chainNow(deps.api)) });
-        }
-        if (req.method === "PUT") {
-          const body = await readJson(req);
-          return send(res, 200, publishCharge(deps.store, deps.net, id, auth, body.link, await chainNow(deps.api)));
-        }
-        if (req.method === "DELETE") {
-          clearCharge(deps.store, id, auth);
-          return send(res, 200, { cleared: true });
-        }
+      if (req.method === "GET" && parts.length === 3 && parts[2]) {
+        const link = LINK_ID.test(parts[2]) ? deps.store.getLink(parts[2]) : null;
+        if (!link) throw new HttpError(404, "Unknown link");
+        return send(res, 200, link);
       }
     }
 
