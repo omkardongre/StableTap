@@ -79,7 +79,7 @@ export function WebhookCard({ vault }: { vault: VaultRecord }) {
       </label>
       <input id="hook-url" type="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://shop.example/stabletap" autoComplete="off" />
       <button type="submit" className="btn primary" disabled={busy || !url.trim()}>
-        {busy ? "Signing…" : "Save with fingerprint"}
+        {busy ? "Confirm on your phone…" : "Save"}
       </button>
       {status?.configured && (
         <button type="button" className="btn" onClick={() => void remove()} disabled={busy}>

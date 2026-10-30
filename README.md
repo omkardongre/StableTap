@@ -2,7 +2,7 @@
   <img src="apps/web/src/app/icon.svg" alt="StableTap logo" width="80" height="80" />
   <h1>StableTap</h1>
   <p><strong>Pay a shop in dollars on Portaldot, and pay the fee in dollars too.</strong><br/>
-  Customers scan or tap, approve with their fingerprint, and never spend the network token.</p>
+  Customers scan the shop's QR, confirm with their phone's screen lock, and never spend the network token.</p>
 
   [![Live app](https://img.shields.io/badge/Live_app-stabletap.vercel.app-5b8cff?style=for-the-badge)](https://stabletap.vercel.app)
   [![Stats](https://img.shields.io/badge/On--chain_stats-live-1fbf75?style=for-the-badge)](https://stabletap.vercel.app/stats)
@@ -25,12 +25,12 @@ Portaldot V3 already has the pieces built in: assets, a native swap pool and fee
 
 | | |
 |---|---|
-| 🔑 **Passkey wallet** | The key is made on the phone and locked by fingerprint or face. No extension, no seed phrase to type. |
-| 📲 **Scan or tap to pay** | The shop phone shows a QR, or the customer taps an NFC sticker at the counter. One signature pays. |
+| 🔑 **Passkey wallet** | The key is rebuilt from a passkey (WebAuthn PRF), confirmed with the phone's screen lock. Clear the browser or get a new phone: sign in with the same passkey. No extension, no seed phrase to type. |
+| 📲 **Scan to pay** | The shop phone shows a QR, the customer scans it. One signature pays. |
 | 💵 **Fee in dollars** | The fee is taken in pUSD through Portaldot's pool. The customer never spends tPOT. |
 | 🔄 **Pay with another token** | A customer holding only PORT pays a dollar invoice; the pool swaps it in the same transaction and the shop gets exact dollars. |
 | 🏪 **Shop app** | Keypad, sales by day, refunds, and a 1% StableTap fee taken in the same transaction. |
-| 🔗 **Payment links** | A link for an item and price, for selling online. Each customer gets a fresh invoice. |
+| 🔗 **Payment links** | A short link (`/l/<id>`) for an item and price, for selling in WhatsApp or Instagram chats. The chat shows a preview card with the shop, item and price. Each customer gets a fresh invoice. |
 | 🦊 **MetaMask checkout** | A Solidity contract (`PotCheckout`) holds and captures the same pUSD through Portaldot's ERC-20 precompile. |
 
 Every payment and sale links to its block on the Portaldot explorer.
@@ -105,7 +105,7 @@ Use Chrome on Android, Safari 18+ on iPhone, or desktop Chrome.
 1. Open <https://stabletap.vercel.app/wallet>, tap **Create my wallet**, then **Get 20 free test dollars**.
 2. On a second device, open <https://stabletap.vercel.app/business>, tap **Set up my shop**, name it and
    tap **Create my shop**.
-3. Charge an amount, scan the QR with the wallet and pay with your fingerprint.
+3. Charge an amount, scan the QR with the wallet and confirm with your phone's screen lock.
 4. Open the payment and tap **View on Portaldot explorer**.
 
 ## 🗺 Next

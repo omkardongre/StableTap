@@ -1,25 +1,26 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { mnemonicGenerate } from "@polkadot/util-crypto";
 import {
   InvoiceExpiredError, assertNotExpired, chainNow, decodeInvoice, encodeInvoice, pay, payWithAsset, quoteFee, quoteSwapPay,
   type Invoice, type Receipt, type SwapQuote,
 } from "@stabletap/engine";
 import { formatAmount } from "@stabletap/engine/config";
+import { ErrorNote } from "@/components/ErrorNote";
+import { PhraseGrid } from "@/components/PhraseGrid";
 import { PoolGauge, type PoolAsset } from "@/components/PoolGauge";
 import { Scanner } from "@/components/Scanner";
 import { getApi } from "@/lib/chain";
 import Link from "next/link";
 import { errorText, shortHash, usd, usdFee, whenText } from "@/lib/format";
 import { fetchPayerRecords, indexerEnabled, type IndexedRecord } from "@/lib/indexer";
-import { pairFrom, withUnlockedPair } from "@/lib/keys";
+import { createWallet, restoreFromPhrase, signIn, withUnlockedPair } from "@/lib/keys";
 import { linkInvoice, parseLink } from "@/lib/links";
 import { STABLE_SYMBOL, explorerLink, network } from "@/lib/network";
 import { findPaid, paidNames, recentPayments, recordPaid, type RecentPayment } from "@/lib/paid";
 import { usePayAssets, type PayAsset } from "@/lib/payAssets";
 import { useBalances } from "@/lib/useBalances";
-import { createVault, loadVault, passkeyPrfSupported, unlockVault, type VaultRecord } from "@/lib/vault";
+import { SignInError, loadVault, passkeyPrfSupported, unlockVault, type VaultRecord } from "@/lib/vault";
 
 type View =
   | { name: "loading" }
@@ -27,6 +28,8 @@ type View =
   | { name: "home" }
   | { name: "scan" }
   | { name: "paste" }
+  // A scanned code or payment link is being checked: straight to a spinner, never the home screen in between.
+  | { name: "opening"; invoice: Invoice | null }
   | { name: "confirm"; invoice: Invoice; fee: bigint | null; alts: AltQuote[] }
   | { name: "paying"; invoice: Invoice; stage: string; via: PayAsset | null }
   | { name: "receipt"; invoice: Invoice; receipt: Receipt; paidWith: PaidWith | null }
@@ -106,7 +109,7 @@ export function Wallet() {
       setRecent([]);
     }
   }, [view.name]);
-  const { balances, error: balanceError } = useBalances(vault?.address ?? null);
+  const { balances, updating, offline, retry } = useBalances(vault?.address ?? null);
   useEffect(() => {
     if (view.name !== "home" || !vault || !indexerEnabled()) return;
     let live = true;
@@ -134,24 +137,26 @@ export function Wallet() {
         setView({ name: "home" });
         return setError(errorText(e));
       }
+      setView({ name: "opening", invoice });
+      let api: Awaited<ReturnType<typeof getApi>>;
       try {
         const paidTx = findPaid(invoice.to, invoice.id);
         if (paidTx) throw new Error("You already paid this. Ask the shop for a new code if needed.");
-        const api = await getApi();
+        api = await getApi();
         assertNotExpired(invoice, await chainNow(api));
       } catch (e) {
         setView({ name: "home" });
         return setError(e instanceof InvoiceExpiredError ? "This payment code has expired. Ask the shop for a new one." : errorText(e));
       }
-      // Other tokens are offered by the effect below, as their balances load.
-      setView({ name: "confirm", invoice, fee: null, alts: [] });
-      const api = await getApi();
+      // The confirm screen opens with the fee and the total already there, so the button doesn't change under the thumb.
+      let fee: bigint | null = null;
       try {
-        const fee = await quoteFee(api, network, invoice, address);
-        setView((v) => (v.name === "confirm" && v.invoice.id === invoice.id ? { ...v, fee } : v));
+        fee = await quoteFee(api, network, invoice, address);
       } catch (e) {
         setError(`Could not estimate the fee: ${errorText(e)}`);
       }
+      // Other tokens are offered by the effect below, as their balances load.
+      setView({ name: "confirm", invoice, fee, alts: [] });
     },
     [],
   );
@@ -203,8 +208,9 @@ export function Wallet() {
           return setView({ name: "setup", supported: await passkeyPrfSupported() });
         }
         setVault(stored);
-        setView({ name: "home" });
-        // Payment links opened directly (e.g. from an NFC tag or a checkout page): /wallet?pay=<portaldot:pay?...>
+        // Payment links opened directly (e.g. from a checkout page): /wallet?pay=<portaldot:pay?...>
+        // go straight to the payment; the home screen only shows if it can't be opened.
+        setView(incoming ? { name: "opening", invoice: null } : { name: "home" });
         if (incoming) await openInvoice(incoming, stored.address);
         // Left over from wallet setup: finish it once there are dollars to pay with (effect below).
         else keep(readPending());
@@ -237,17 +243,15 @@ export function Wallet() {
     })();
   }, [pending, vault, balances, view.name, openInvoice]);
 
-  async function create() {
+  /** Create a wallet, sign in with an existing passkey, or restore from the recovery phrase. */
+  async function open(how: () => Promise<VaultRecord>) {
     setBusy(true);
     setError(null);
     try {
-      const phrase = mnemonicGenerate(12);
-      const pair = await pairFrom(phrase);
-      setVault(await createVault(phrase, pair.address));
-      pair.lock();
+      setVault(await how());
       setView({ name: "home" });
     } catch (e) {
-      setError(errorText(e));
+      setError(e instanceof SignInError ? e.message : errorText(e));
     } finally {
       setBusy(false);
     }
@@ -284,8 +288,8 @@ export function Wallet() {
     setError(null);
     try {
       const via = alt?.asset ?? null;
-      setView({ name: "paying", invoice, stage: "Confirm with your fingerprint…", via });
-      // Chain stages (signed, in a block, final) mean nothing to a shopper: after the fingerprint it's just "Paying…".
+      setView({ name: "paying", invoice, stage: "Confirm on your phone…", via });
+      // Chain stages (signed, in a block, final) mean nothing to a shopper: after the screen lock it's just "Paying…".
       const api = await getApi();
       const onStage = () => setView({ name: "paying", invoice, via, stage: "Paying…" });
       let paidWith: PaidWith | null = null;
@@ -317,7 +321,6 @@ export function Wallet() {
     }
   }
 
-  const alert = error ?? fundError ?? balanceError ?? assetError;
   const activity = vault ? toActivity(chainRecent, recent, vault.address) : [];
   const empty = balances !== null && balances.native === 0n && balances.stable === 0n;
   // Pools a swap payment moves: shown from the choice to the receipt, so the change is visible.
@@ -335,11 +338,9 @@ export function Wallet() {
     <section className="stack" aria-live="polite">
       {/* The active "Wallet" tab already names the page; keep a heading for screen readers only. */}
       <h1 className="sr-only">Wallet</h1>
-      {alert && (
-        <p className="alert" role="alert">
-          {alert}
-        </p>
-      )}
+      <ErrorNote text={error} onClose={() => setError(null)} />
+      <ErrorNote text={fundError} onClose={() => setFundError(null)} />
+      <ErrorNote text={assetError} />
 
       {notice && view.name === "home" && (
         <p className="notice" role="status">
@@ -350,23 +351,46 @@ export function Wallet() {
       {view.name === "loading" && <p className="muted">Loading…</p>}
 
       {view.name === "setup" && (
-        <div className="card">
-          <h2>Create your wallet</h2>
-          {pending ? (
-            <p className="muted">
-              To pay {pending.invoice.merchant ?? "the shop"} <strong>{usd(pending.invoice.amount)}</strong>. Secured with your fingerprint.
-            </p>
-          ) : (
-            <p className="muted">Pay shops in dollars. Secured with your fingerprint.</p>
+        <>
+          <div className="card">
+            <h2>Create your wallet</h2>
+            {pending ? (
+              <p className="muted">
+                To pay {pending.invoice.merchant ?? "the shop"} <strong>{usd(pending.invoice.amount)}</strong>. Secured with your phone&apos;s screen lock.
+              </p>
+            ) : (
+              <p className="muted">Pay shops in dollars. Secured with your phone&apos;s screen lock.</p>
+            )}
+            {view.supported ? (
+              <button className="btn primary" onClick={() => void open(() => createWallet("personal"))} disabled={busy}>
+                {busy ? (
+                  <>
+                    <span className="spinner" aria-hidden="true" />
+                    One moment…
+                  </>
+                ) : (
+                  "Create my wallet"
+                )}
+              </button>
+            ) : (
+              <p className="alert">This browser can&apos;t keep a wallet safe with your screen lock. Use Chrome on Android or Safari on iPhone (iOS 18 or later).</p>
+            )}
+          </div>
+          {view.supported && !busy && (
+            <>
+              <div className="signin">
+                <span className="muted small">Already have a wallet?</span>
+                <button type="button" className="link-btn" onClick={() => void open(() => signIn("personal"))}>
+                  Sign in
+                </button>
+              </div>
+              <details className="more">
+                <summary>Other ways to sign in</summary>
+                <PhraseForm onSubmit={(phrase) => void open(() => restoreFromPhrase("personal", phrase))} />
+              </details>
+            </>
           )}
-          {view.supported ? (
-            <button className="btn primary" onClick={create} disabled={busy}>
-              {busy ? "Creating…" : "Create my wallet"}
-            </button>
-          ) : (
-            <p className="alert">This browser can&apos;t lock a key with a passkey. Use Chrome on Android or Safari 18+ on iPhone.</p>
-          )}
-        </div>
+        </>
       )}
 
       {vault && view.name === "home" && (
@@ -380,7 +404,7 @@ export function Wallet() {
                 </button>
               )}
             </div>
-            <span className="big">{balances ? usd(balances.stable) : "…"}</span>
+            <span className="big">{balances ? usd(balances.stable) : <span className="skeleton big-skeleton" aria-label="Loading your balance" />}</span>
             {payAssets
               .filter((a) => a.balance > 0n)
               .map((a) => (
@@ -388,7 +412,16 @@ export function Wallet() {
                   {amt(a.balance, a)}
                 </span>
               ))}
-            {!balances && <span className="muted small">Connecting…</span>}
+            {offline ? (
+              <span className="row-start small offline">
+                No connection. Retrying…
+                <button type="button" className="link-btn" onClick={retry}>
+                  Try again
+                </button>
+              </span>
+            ) : (
+              (updating || !balances) && <span className="muted small">Updating…</span>
+            )}
           </div>
           {pending && (
             <div className="notice" role="status">
@@ -406,10 +439,11 @@ export function Wallet() {
               {funding !== null && <p className="muted small center">This takes up to a minute.</p>}
             </>
           ) : (
+            // Scanning needs no network; only paying does, so the button works while the balance loads.
             <button
               className="btn primary"
               onClick={() => setView({ name: "scan" })}
-              disabled={!balances || (balances.stable === 0n && !payAssets.some((a) => a.balance > 0n))}
+              disabled={!updating && balances !== null && balances.stable === 0n && !payAssets.some((a) => a.balance > 0n)}
             >
               Scan to pay
             </button>
@@ -449,8 +483,12 @@ export function Wallet() {
           <details className="card">
             <summary>Account and backup</summary>
             <div className="stack">
-              {/* The one thing everyone should do: without the phrase, a lost phone means lost money. */}
-              <p className="muted small">Write down your recovery phrase. It&apos;s the only way to get your money back if you lose this phone.</p>
+              {/* The passkey brings the wallet back on a new phone; the phrase is the backup if the passkey is gone too. */}
+              <p className="muted small">
+                {vault.v === 2
+                  ? "On a new phone, sign in with your passkey. Write down your recovery phrase too, in case the passkey is lost."
+                  : "Write down your recovery phrase. It's the only way to get your money back if you lose this phone."}
+              </p>
               <button className="btn primary" onClick={showPhrase}>
                 Show recovery phrase
               </button>
@@ -498,20 +536,38 @@ export function Wallet() {
         </div>
       )}
 
+      {view.name === "opening" && (
+        <div className="card" aria-busy="true">
+          {view.invoice && (
+            <div className="amount-head">
+              <span className="label">Pay {view.invoice.merchant ?? "merchant"}</span>
+              <span className="big">{usd(view.invoice.amount)}</span>
+            </div>
+          )}
+          <p className="row-start center-row muted">
+            <span className="spinner dark" aria-hidden="true" />
+            Opening payment…
+          </p>
+        </div>
+      )}
+
       {view.name === "confirm" && (
         <div className="card">
-          <span className="label">Pay {view.invoice.merchant ?? "merchant"}</span>
-          <span className="big">{usd(view.invoice.amount)}</span>
+          <div className="amount-head">
+            <span className="label">Pay {view.invoice.merchant ?? "merchant"}</span>
+            <span className="big">{usd(view.invoice.amount)}</span>
+          </div>
           <dl className="kv">
             <dt>Fee</dt>
             <dd>{view.fee === null ? "…" : usdFee(view.fee)}</dd>
           </dl>
+          {/* The button says what leaves the wallet: price plus fee, like a card terminal's total. */}
           <button
             className="btn primary"
             onClick={() => void confirmPay(view.invoice)}
-            disabled={view.fee === null || !balances || balances.stable < view.invoice.amount + view.fee}
+            disabled={view.fee === null || !balances || updating || balances.stable < view.invoice.amount + view.fee}
           >
-            Pay with fingerprint
+            Pay {view.fee === null ? usd(view.invoice.amount) : usdFee(view.invoice.amount + view.fee)}
           </button>
           {view.fee !== null && balances && balances.stable < view.invoice.amount + view.fee && (
             <p className={view.alts.length ? "muted small" : "alert"}>Not enough dollars for this payment{view.alts.length ? ". You can pay with another coin you hold:" : "."}</p>
@@ -532,7 +588,7 @@ export function Wallet() {
                 </dl>
                 <span className="muted small">The shop still receives exactly {usd(view.invoice.amount)}. Your {asset.symbol} is converted automatically.</span>
                 <button className="btn" onClick={() => quote && void confirmPay(view.invoice, { asset, quote })} disabled={!enough}>
-                  Pay with fingerprint ({asset.symbol})
+                  Pay with {asset.symbol}
                 </button>
                 {quote && !enough && <p className="alert small">Not enough {asset.symbol}.</p>}
                 {altError && <p className="alert small">{altError}</p>}
@@ -547,9 +603,11 @@ export function Wallet() {
 
       {view.name === "paying" && (
         <div className="card" aria-busy="true">
-          <span className="label">Paying {view.invoice.merchant ?? "merchant"}</span>
-          <span className="big">{usd(view.invoice.amount)}</span>
-          <p className="row-start">
+          <div className="amount-head">
+            <span className="label">Paying {view.invoice.merchant ?? "merchant"}</span>
+            <span className="big">{usd(view.invoice.amount)}</span>
+          </div>
+          <p className="row-start center-row">
             {view.stage === "Paying…" && <span className="spinner dark" aria-hidden="true" />}
             {view.stage}
           </p>
@@ -575,6 +633,8 @@ export function Wallet() {
                 <>
                   <dt>Fee</dt>
                   <dd>{usdFee(view.receipt.feePaid)}</dd>
+                  <dt>Total</dt>
+                  <dd>{usdFee(view.invoice.amount + view.receipt.feePaid)}</dd>
                 </>
               )}
               <dt>Time</dt>
@@ -610,8 +670,8 @@ export function Wallet() {
       {view.name === "phrase" && (
         <div className="card">
           <h2>Recovery phrase</h2>
-          <p className="muted">Write these words down and keep them offline. Anyone with them controls this wallet. If you lose this phone, they are the only way back.</p>
-          <p className="mono">{view.phrase}</p>
+          <p className="muted small">Write these 12 words on paper, in order. Anyone with them controls this wallet.</p>
+          <PhraseGrid phrase={view.phrase} />
           <button className="btn primary" onClick={() => setView({ name: "home" })}>
             Hide
           </button>
@@ -677,26 +737,52 @@ function ActivityDetail({ item, payAssets, onBack }: { item: Activity; payAssets
         <dd>{whenText(item.at)}</dd>
         {item.fee && (
           <>
-            <dt>Network fee</dt>
+            <dt>Fee</dt>
             <dd>{feeAsset ? amt(item.fee.amount, feeAsset) : usdFee(item.fee.amount)}</dd>
           </>
         )}
-        {item.invoiceId && (
-          <>
-            <dt>Order</dt>
-            <dd className="mono small">{item.invoiceId}</dd>
-          </>
-        )}
       </dl>
-      {explorer ? (
-        <a className="link-btn" href={explorer} target="_blank" rel="noopener noreferrer">
-          View on Portaldot explorer ↗
-        </a>
-      ) : (
-        <p className="muted small">The on-chain record shows up here in a few seconds.</p>
-      )}
-      <CopyButton text={item.key} label="Copy transaction ID" />
+      {/* Order ids and transaction ids are for support and proof, not for paying: tucked away like a bank app's "details". */}
+      <details>
+        <summary>More details</summary>
+        {item.invoiceId && (
+          <dl className="kv small">
+            <dt>Order</dt>
+            <dd className="mono">{item.invoiceId}</dd>
+          </dl>
+        )}
+        <CopyButton text={item.key} label="Copy transaction ID" />
+        {explorer ? (
+          <a className="link-btn" href={explorer} target="_blank" rel="noopener noreferrer">
+            View on Portaldot explorer ↗
+          </a>
+        ) : (
+          <p className="muted small">The on-chain record shows up here in a few seconds.</p>
+        )}
+      </details>
     </div>
+  );
+}
+
+/** Restore with the 12 words: the backup when the passkey itself is gone. */
+function PhraseForm({ onSubmit }: { onSubmit: (phrase: string) => void }) {
+  const [phrase, setPhrase] = useState("");
+  return (
+    <form
+      className="card"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (phrase.trim()) onSubmit(phrase);
+      }}
+    >
+      <label className="field-label" htmlFor="wallet-phrase">
+        Recovery phrase
+      </label>
+      <textarea id="wallet-phrase" className="phrase-input" value={phrase} onChange={(e) => setPhrase(e.target.value)} rows={3} placeholder="12 words, separated by spaces" autoComplete="off" spellCheck={false} autoCapitalize="none" required />
+      <button type="submit" className="btn" disabled={!phrase.trim()}>
+        Restore my wallet
+      </button>
+    </form>
   );
 }
 

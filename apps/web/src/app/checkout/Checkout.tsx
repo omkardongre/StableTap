@@ -7,6 +7,7 @@ import {
   CHECKOUT_ABI, TOKEN_ABI, checkoutAddress, connectWallet, discoverWallets, evmEnabled, evmErrorText, evmPublic, invoiceKey, merchantPayments, send, signPermit,
   type DiscoveredWallet,
 } from "@/lib/evm";
+import { ErrorNote } from "@/components/ErrorNote";
 import { options } from "@/lib/network";
 
 interface Token {
@@ -109,11 +110,7 @@ export function Checkout() {
       <p className="muted small">
         The same {token?.symbol ?? "pUSD"} through Portaldot&apos;s ERC-20 precompile, held and settled by the PotCheckout contract. Gas is paid in tPOT on this path.
       </p>
-      {error && (
-        <p className="alert" role="alert">
-          {error}
-        </p>
-      )}
+      <ErrorNote text={error} onClose={() => setError(null)} />
       {note && <p className="notice" role="status">{note}</p>}
 
       {!conn ? (

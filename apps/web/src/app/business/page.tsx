@@ -5,8 +5,8 @@ import { ShopButton } from "./ShopButton";
 export const metadata: Metadata = { title: "StableTap Business", description: "Get paid in dollars at the counter and online. 1% per sale, no monthly fee." };
 
 const STEPS = [
-  { title: "Set up your shop", body: "Enter a name. Your shop wallet is made on this phone." },
-  { title: "At the counter", body: "Type the amount. Your customer scans the code or taps your sticker." },
+  { title: "Set up your shop", body: "Enter a name. Your passkey keeps it safe and signs you in on a new phone." },
+  { title: "At the counter", body: "Type the amount. Your customer scans the code with their phone." },
   { title: "Online", body: "Make a payment link for an item and share it in a chat or on your site." },
 ];
 

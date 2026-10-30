@@ -2,9 +2,9 @@ import Link from "next/link";
 import { PhoneMock } from "@/components/PhoneMock";
 
 const STEPS = [
-  { title: "Open your wallet", body: "Your fingerprint keeps it safe. Nothing to install." },
+  { title: "Open your wallet", body: "Your phone's screen lock keeps it safe. Nothing to install." },
   { title: "Scan the shop's code", body: "Check the amount and the shop name." },
-  { title: "Pay with your fingerprint", body: "Done in seconds. The fee comes out of your dollars." },
+  { title: "Confirm and pay", body: "Done in seconds. The fee comes out of your dollars." },
 ];
 
 export default function Home() {
@@ -15,9 +15,9 @@ export default function Home() {
           <h1 id="home-title">
             Pay in dollars
             <br />
-            <span className="gradient-text">with your fingerprint.</span>
+            <span className="gradient-text">with one scan.</span>
           </h1>
-          <p className="lead">Scan the shop&apos;s code and pay. No app, no extra coins.</p>
+          <p className="lead">Scan the shop&apos;s code and confirm with your phone&apos;s lock. No app, no extra coins.</p>
           <Link className="btn primary hero-btn" href="/wallet">
             Open wallet
           </Link>
@@ -26,7 +26,7 @@ export default function Home() {
           <span className="mock-label">Corner Coffee</span>
           <span className="mock-amount">$4.50</span>
           <span className="mock-sub">Fee $0.03</span>
-          <span className="mock-btn">Pay with fingerprint</span>
+          <span className="mock-btn">Pay $4.50</span>
         </PhoneMock>
       </section>
 

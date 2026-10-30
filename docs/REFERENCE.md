@@ -97,7 +97,11 @@ Pay with any token: with `NEXT_PUBLIC_STABLETAP_PAY_ASSETS` set, a customer shor
 
 Split payments: with a platform share set, the customer still pays the invoice amount. One extrinsic sends the merchant `amount − share` and the platform `share` (rounded down). The platform account must already exist on chain and hold at least the asset's minimum balance, like any receiver of a non-sufficient asset.
 
-Tap to pay (needs the indexer): in POS settings, "Set up tap to pay" registers the POS as a terminal and shows its fixed link `/tap/<id>`. Write it once to an NFC sticker (the POS writes it with Web NFC in Chrome on Android, or use any NFC app) or print it as a QR. Phones open a URL tag natively, so the customer needs no app. While a sale runs, the POS publishes its payment link for that terminal; the tag page opens it in the wallet, which checks it like a scanned QR. A terminal only accepts links that pay its own merchant and expire within 15 minutes; its write token stays on the POS (only a SHA-256 hash is stored), and a charge is dropped once it is paid on chain or expires.
+Passkey keys (`lib/vault.ts`): a new wallet or shop gets a discoverable platform passkey. The WebAuthn PRF extension, evaluated with a fixed per-kind salt (`SHA-256("StableTap passkey key v2 / <kind>")`), returns the same 32 bytes on every device that has the passkey; HKDF-SHA-256 turns them into the 128-bit entropy of a 12-word BIP-39 phrase, and the sr25519 key comes from that phrase. The browser stores only the address and credential id, so clearing site data or a new phone (same Google or Apple account) loses nothing: "Sign in" asks for the passkey with no credential id, and the passkey's user handle (`"ST" 0x02 <kind> <random>`) tells a wallet passkey from a shop passkey. The phrase is the backup: "Other ways to sign in → Recovery phrase" makes a new passkey that locks an AES-256-GCM copy of the phrase on that phone (the v1 format, also used by wallets made before passkey sign-in).
+
+Connection: the runtime metadata (~640 KB) is cached in `localStorage` keyed by genesis hash and spec version and passed to `ApiPromise.create({ metadata })`, so a page open skips the download unless the runtime changed. Requests time out after 30 s instead of 60 s; the wallet and sales screens show the last balance and sales saved on the phone at once, retry with backoff, and show "No connection. Retrying…" instead of library errors.
+
+Short payment links (needs the indexer): creating a link saves `{ id, item, shop, amount, merchant }` with the indexer, so the shared URL is `/l/<id>` and doesn't contain the address. `/l/<id>` and the long form `/l?k=…` render Open Graph tags per link (title "Chocolate cake · $2.00", text "Pay Sunrise Bakery in dollars") and a 1200×630 PNG from `/og` (about 60 KB; WhatsApp needs under 600 KB). The long form stays the fallback when the indexer can't be reached.
 
 Fee contrast: before paying, the wallet shows what the same payment would need with the usual tPOT fee (`nativeFeeCheck`). A wallet holding only the deposit can spend 0 tPOT, so that path would fail; the node rejects it with `1010 Inability to pay some fees` (checked in the fork test).
 
@@ -152,9 +156,8 @@ pnpm --filter @stabletap/indexer test
 | `GET /v1/merchants/:address/records` | payments to and refunds by a merchant, with refunded totals (`limit`, `before`) |
 | `GET /v1/merchants/:address/webhook` | configured host and last deliveries (no secret, no full URL) |
 | `PUT` / `DELETE /v1/merchants/:address/webhook` | set or remove the webhook; body signed by the merchant key |
-| `POST /v1/terminals` | register a tap terminal for `{ merchant }`; returns its id and a write token (shown once) |
-| `GET /v1/terminals/:id/charge` | `{ charge }`: the open charge behind a counter tag, or `null` (dropped once paid or expired) |
-| `PUT` / `DELETE /v1/terminals/:id/charge` | publish or withdraw the current charge; `Authorization: Bearer <token>` |
+| `POST /v1/links` | save a short payment link `{ id, item, shop, amount, merchant }` (rate limited; same content again is fine, another link with that id is `409`) |
+| `GET /v1/links/:id` | a short payment link, for `/l/<id>` and its chat preview |
 
 Webhooks follow [Standard Webhooks](https://www.standardwebhooks.com/): headers `webhook-id`, `webhook-timestamp`, `webhook-signature: v1,<base64 HMAC-SHA256>`, events `payment.succeeded` and `refund.succeeded`, sent once the block is final.
 
@@ -162,7 +165,7 @@ Webhooks follow [Standard Webhooks](https://www.standardwebhooks.com/): headers 
 - Registration needs an sr25519 signature by the merchant address over `stabletap:webhook:v1 / merchant / url / signedAt`, fresh within 5 minutes and newer than the last one. The `whsec_` secret is returned once.
 - Targets must be `https` and resolve to public addresses, checked again at connect time (DNS rebinding). Redirects are not followed. `INDEXER_ALLOW_INSECURE_WEBHOOKS=1` lifts this for local testing only.
 
-The read API is public; it only exposes chain data. Webhook writes are rate limited per client. Put it behind TLS and your host's rate limiting when deployed.
+The read API is public; it only exposes chain data and the public details of payment links. Link and webhook writes are rate limited per client. Put it behind TLS and your host's rate limiting when deployed.
 
 ## Live on the V3 testnet
 
