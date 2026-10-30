@@ -7,9 +7,20 @@ import type { NetworkConfig } from "./config.ts";
  * Without this override polkadot.js assumes the Asset Hub shape (XCM location)
  * and the fee asset is encoded wrongly.
  */
-export async function connect(net: NetworkConfig): Promise<ApiPromise> {
+export interface ConnectOptions {
+  /**
+   * Metadata from an earlier connection, keyed `<genesisHash>-<specVersion>` (polkadot.js format).
+   * A match skips downloading the runtime metadata (~640 KB on Portaldot V3).
+   */
+  metadata?: Record<string, `0x${string}`>;
+  /** Per-request timeout. polkadot.js defaults to 60 s, which leaves a phone on a spinner for a minute. */
+  timeoutMs?: number;
+}
+
+export async function connect(net: NetworkConfig, opts: ConnectOptions = {}): Promise<ApiPromise> {
   return ApiPromise.create({
-    provider: new WsProvider(net.ws),
+    provider: new WsProvider(net.ws, 2_500, {}, opts.timeoutMs),
+    ...(opts.metadata ? { metadata: opts.metadata } : {}),
     noInitWarn: true,
     throwOnConnect: true,
     signedExtensions: {
