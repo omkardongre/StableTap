@@ -3,12 +3,13 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { parseAmount } from "@stabletap/engine/config";
+import { ErrorNote } from "@/components/ErrorNote";
 import { Qr } from "@/components/Qr";
 import { errorText, usd } from "@/lib/format";
-import { ITEM_MAX, createLink, deleteLink, linkUrl, loadLinks, type PaymentLink } from "@/lib/links";
+import { shareText } from "@/lib/linkCore";
+import { ITEM_MAX, createLink, deleteLink, linkUrl, loadLinks, upgradeLinks, type PaymentLink } from "@/lib/links";
 import { network } from "@/lib/network";
-
-const SHOP_KEY = "stabletap.pos.shop.v1";
+import { SHOP_KEY } from "@/lib/shop";
 
 interface Shop {
   name: string;
@@ -27,7 +28,11 @@ export function Links() {
       const raw = localStorage.getItem(SHOP_KEY);
       const s = raw ? (JSON.parse(raw) as Shop) : null;
       setShop(s);
-      if (s) setLinks(loadLinks(s.payout));
+      if (s) {
+        setLinks(loadLinks(s.payout));
+        // Links made before short links (or offline) get their short URL now.
+        void upgradeLinks(s.payout).then((l) => l && setLinks(l));
+      }
     } catch (e) {
       setError(errorText(e));
       setShop(null);
@@ -56,11 +61,7 @@ export function Links() {
   return (
     <section className="stack" aria-live="polite">
       <h1 className="sr-only">Payment links</h1>
-      {error && (
-        <p className="alert" role="alert">
-          {error}
-        </p>
-      )}
+      <ErrorNote text={error} onClose={() => setError(null)} />
 
       {creating ? (
         <CreateForm
@@ -111,40 +112,79 @@ function CreateForm({ shop, onCancel, onCreated }: { shop: Shop; onCancel: () =>
   const [item, setItem] = useState("");
   const [price, setPrice] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // A price that can't be read: one line under the field, gone as soon as it's edited.
+  const [priceError, setPriceError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   return (
     <form
       className="card"
       onSubmit={(e) => {
         e.preventDefault();
         setError(null);
-        try {
-          const p = price.trim().replace(/^\$/, "");
-          if (!/^\d{1,7}(\.\d{1,2})?$/.test(p)) throw new Error("Enter a price like 12.00");
-          onCreated(createLink({ item, amount: parseAmount(p, network.decimals), shop: shop.name, to: shop.payout }));
-        } catch (err) {
-          setError(errorText(err));
-        }
+        const p = price.trim().replace(/^\$/, "");
+        if (!/^\d{1,7}(\.\d{1,2})?$/.test(p)) return setPriceError("Enter a price like 12.00");
+        void (async () => {
+          try {
+            setBusy(true);
+            onCreated(await createLink({ item, amount: parseAmount(p, network.decimals), shop: shop.name, to: shop.payout }));
+          } catch (err) {
+            setError(errorText(err));
+            setBusy(false);
+          }
+        })();
       }}
     >
       <h2>New payment link</h2>
       <label className="field-label" htmlFor="link-item">
         What are you selling?
       </label>
-      <input id="link-item" value={item} onChange={(e) => setItem(e.target.value)} maxLength={ITEM_MAX} placeholder="T-shirt" required autoFocus />
+      <input
+        id="link-item"
+        value={item}
+        onChange={(e) => {
+          setItem(e.target.value);
+          setError(null);
+        }}
+        maxLength={ITEM_MAX}
+        placeholder="T-shirt"
+        required
+        autoFocus
+      />
       <label className="field-label" htmlFor="link-price">
         Price
       </label>
-      <div className="money-input">
+      <div className={`money-input${priceError ? " invalid" : ""}`}>
         <span aria-hidden="true">$</span>
-        <input id="link-price" inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="0.00" required />
+        <input
+          id="link-price"
+          inputMode="decimal"
+          value={price}
+          onChange={(e) => {
+            setPrice(e.target.value);
+            setPriceError(null);
+            setError(null);
+          }}
+          placeholder="0.00"
+          required
+          aria-invalid={priceError !== null}
+          aria-describedby="link-price-error"
+        />
       </div>
-      {error && (
-        <p className="alert" role="alert">
-          {error}
+      {priceError && (
+        <p id="link-price-error" className="field-error" role="alert">
+          {priceError}
         </p>
       )}
-      <button type="submit" className="btn primary">
-        Create link
+      <ErrorNote text={error} onClose={() => setError(null)} />
+      <button type="submit" className="btn primary" disabled={busy}>
+        {busy ? (
+          <>
+            <span className="spinner" aria-hidden="true" />
+            Creating…
+          </>
+        ) : (
+          "Create link"
+        )}
       </button>
       <button type="button" className="btn" onClick={onCancel}>
         Cancel
@@ -175,7 +215,7 @@ function LinkRow({ link, url, onDelete }: { link: PaymentLink; url: string; onDe
           {copied ? "Copied" : "Copy link"}
         </button>
         {canShare ? (
-          <button type="button" className="btn" onClick={() => void navigator.share({ title: link.item, text: `Pay for ${link.item}`, url }).catch(() => undefined)}>
+          <button type="button" className="btn" onClick={() => void navigator.share({ title: link.item, text: shareText(link), url }).catch(() => undefined)}>
             Share
           </button>
         ) : (
