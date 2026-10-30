@@ -29,9 +29,21 @@ export function dayText(ms: number): string {
   return date.toLocaleDateString("en-GB", { day: "numeric", month: "short", ...(date.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" }) });
 }
 
-/** "12:57 AM" today, otherwise "23 Oct, 12:57 AM". */
-export const whenText = (ms: number) => (dayText(ms) === "Today" ? clockText(ms) : `${dayText(ms)}, ${clockText(ms)}`);
+/** "Today, 12:57 AM", "Yesterday, 9:05 PM" or "23 Oct, 12:57 AM": a time alone doesn't say which day. */
+export const whenText = (ms: number) => `${dayText(ms)}, ${clockText(ms)}`;
 
 export const tpot = (planck: bigint) => formatAmount(planck, NATIVE_DECIMALS);
 export const shortHash = (h: string) => `${h.slice(0, 10)}…${h.slice(-8)}`;
-export const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** Shown instead of developer text ("FATAL: Unable to initialize the API…") when the network can't be reached. */
+export const OFFLINE_TEXT = "No connection. Check your internet and try again.";
+const CONNECTION = /RPC endpoint|initialize the API|WebSocket|disconnected|No response received|timed? ?out|Failed to fetch|NetworkError|Abnormal Closure|\b1006\b/i;
+export const isConnectionError = (e: unknown) => CONNECTION.test(e instanceof Error ? e.message : String(e));
+
+/** A message a shop owner or customer can act on. Network trouble never shows as library internals. */
+export function errorText(e: unknown): string {
+  // The phone's lock prompt was dismissed or timed out (WebAuthn reports both as NotAllowedError).
+  if (e instanceof Error && e.name === "NotAllowedError") return "Not confirmed on your phone. Try again.";
+  if (isConnectionError(e)) return OFFLINE_TEXT;
+  return e instanceof Error ? e.message : String(e);
+}
